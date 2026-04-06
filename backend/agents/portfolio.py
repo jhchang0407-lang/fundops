@@ -115,13 +115,26 @@ class PortfolioAgent(AgentPlugin):
     description = "Monitor held positions — P&L, thesis health, alerts"
 
     def __init__(self, config: dict = None, fmp=None, yfinance=None, db=None,
-                 web_search=None, sec=None):
+                 web_search=None, sec=None, v2db=None):
         super().__init__(config)
         self.fmp = fmp
         self.yfinance = yfinance
         self.db = db
         self.web_search = web_search
         self.sec = sec
+        self.v2db = v2db
+
+    @staticmethod
+    def _compute_health_score(thesis_health: list[dict]) -> int | None:
+        """Compute a 0-100 health score from per-assumption statuses."""
+        if not thesis_health:
+            return None
+        scorable = [h for h in thesis_health if h.get("status") != "unknown"]
+        if not scorable:
+            return None
+        weights = {"intact": 100, "at_risk": 50, "breach": 0, "monitoring": 70, "unknown": 50}
+        total = sum(weights.get(h["status"], 50) for h in scorable)
+        return round(total / len(scorable))
 
     async def _check_thesis_health(
         self,
@@ -297,11 +310,12 @@ class PortfolioAgent(AgentPlugin):
     ) -> dict:
         """Web research: has anything happened that challenges the thesis?
 
-        Only called on weekly runs, not daily (cost management).
+        Three-tier signal system:
+        - SEC-confirmed breach: only set by _check_thesis_health (ground truth)
+        - Web-corroborated (2+ signals in 90 days): escalate to "at_risk"
+        - Web-single (1 signal): "monitoring" — logged but no status change
 
-        For each key assumption (up to 3), runs a targeted web search and
-        grounds the result against known financial data. Returns per-assumption
-        status: "intact", "breach", or "unconfirmed".
+        Web search alone NEVER sets "breach". Only SEC data can confirm "breach".
 
         Args:
             ticker: Stock ticker symbol.
@@ -310,10 +324,10 @@ class PortfolioAgent(AgentPlugin):
             financial_data: Dict with financial metrics for fact anchoring.
 
         Returns:
-            Dict with thesis_events list and any_breach flag.
+            Dict with thesis_events list and any_at_risk flag.
         """
         events: list[dict] = []
-        any_breach = False
+        any_at_risk = False
 
         # Limit to 3 assumptions per position for cost management
         assumptions_to_check = key_assumptions[:3]
@@ -343,6 +357,8 @@ class PortfolioAgent(AgentPlugin):
                         "finding": result.error or "No results",
                         "confidence": 0.0,
                         "status": "unconfirmed",
+                        "signal_direction": "neutral",
+                        "signal_count": 0,
                     })
                     continue
 
@@ -355,45 +371,94 @@ class PortfolioAgent(AgentPlugin):
                     fact_anchor=fact_anchor,
                 )
 
-                # Determine status from grounding signals
-                status = "intact"
                 confidence = grounded.confidence
 
                 # If grounding failed entirely, mark unconfirmed
                 if not grounded.grounded:
-                    status = "unconfirmed"
-                    confidence = grounded.confidence
+                    events.append({
+                        "assumption": assumption,
+                        "finding": result.text[:500],
+                        "confidence": confidence,
+                        "status": "unconfirmed",
+                        "signal_direction": "neutral",
+                        "signal_count": 0,
+                    })
+                    continue
+
+                # Determine signal direction from keyword analysis
+                text_lower = result.text.lower()
+                negative_signals = [
+                    "challenged", "contradicted", "violated",
+                    "deteriorated", "declined", "lost",
+                    "downgraded", "missed", "fell short",
+                    "abandoned", "reversed", "warning",
+                ]
+                positive_signals = [
+                    "confirmed", "reaffirmed", "on track",
+                    "exceeded", "improved", "maintained",
+                    "consistent", "intact", "supported",
+                ]
+
+                neg_count = sum(1 for s in negative_signals if s in text_lower)
+                pos_count = sum(1 for s in positive_signals if s in text_lower)
+
+                if neg_count > pos_count and neg_count >= 2:
+                    signal_direction = "negative"
+                elif pos_count > neg_count:
+                    signal_direction = "positive"
                 else:
-                    # Check for contradiction signals that indicate a breach
-                    text_lower = result.text.lower()
-                    breach_signals = [
-                        "challenged", "contradicted", "violated",
-                        "deteriorated", "declined", "lost",
-                        "downgraded", "missed", "fell short",
-                        "abandoned", "reversed", "warning",
-                    ]
-                    intact_signals = [
-                        "confirmed", "reaffirmed", "on track",
-                        "exceeded", "improved", "maintained",
-                        "consistent", "intact", "supported",
-                    ]
+                    signal_direction = "neutral"
 
-                    breach_count = sum(1 for s in breach_signals if s in text_lower)
-                    intact_count = sum(1 for s in intact_signals if s in text_lower)
+                # Persist web signal as judgment event for corroboration tracking
+                if self.v2db and signal_direction == "negative":
+                    try:
+                        self.v2db.record_judgment_event(
+                            event_type="thesis_web_signal",
+                            ticker=ticker,
+                            agent="portfolio",
+                            data={
+                                "assumption": assumption,
+                                "signal_direction": signal_direction,
+                                "finding": result.text[:500],
+                                "confidence": confidence,
+                            },
+                            rationale=f"Web signal: {signal_direction} for '{assumption[:60]}'",
+                        )
+                    except Exception as e:
+                        log.warning(f"Failed to persist web signal for {ticker}: {e}")
 
-                    if breach_count > intact_count and breach_count >= 2:
-                        status = "breach"
-                        any_breach = True
-                    elif intact_count > breach_count:
-                        status = "intact"
+                # Corroboration check: how many negative signals in last 90 days?
+                signal_count = 0
+                if self.v2db and signal_direction == "negative":
+                    try:
+                        signal_count = self.v2db.get_web_signal_count(
+                            ticker, assumption, days=90
+                        )
+                    except Exception:
+                        signal_count = 1  # At least this one
+
+                # Status based on corroboration:
+                # - 0-1 negative signals: "monitoring" (single hit, might be noise)
+                # - 2+ negative signals: "at_risk" (corroborated, escalate)
+                # - Web NEVER sets "breach" — only SEC data can do that
+                if signal_direction == "negative":
+                    if signal_count >= 2:
+                        status = "at_risk"
+                        any_at_risk = True
                     else:
-                        status = "unconfirmed"
+                        status = "monitoring"
+                elif signal_direction == "positive":
+                    status = "intact"
+                else:
+                    status = "monitoring"
 
                 events.append({
                     "assumption": assumption,
-                    "finding": result.text[:500],  # Truncate for storage
+                    "finding": result.text[:500],
                     "confidence": confidence,
                     "status": status,
+                    "signal_direction": signal_direction,
+                    "signal_count": signal_count,
                 })
 
             except Exception as e:
@@ -403,9 +468,59 @@ class PortfolioAgent(AgentPlugin):
                     "finding": f"Search failed: {e}",
                     "confidence": 0.0,
                     "status": "unconfirmed",
+                    "signal_direction": "neutral",
+                    "signal_count": 0,
                 })
 
-        return {"thesis_events": events, "any_breach": any_breach}
+        return {"thesis_events": events, "any_at_risk": any_at_risk}
+
+    async def _validate_web_signals(self, ticker: str, sec_health: list[dict]):
+        """Compare past web signals against new SEC data to learn accuracy.
+
+        After SEC data arrives (ground truth), check if prior web signals
+        predicted the outcome correctly. Records accuracy for the learning loop.
+        """
+        if not self.v2db or not sec_health:
+            return
+
+        for check in sec_health:
+            assumption = check.get("assumption", "")
+            sec_status = check.get("status", "unknown")
+            if sec_status == "unknown" or not assumption:
+                continue
+
+            # Look up recent web signals for this assumption
+            try:
+                from backend.core.db_v2 import ScreenerV2DB
+                rows = self.v2db.conn.execute(
+                    "SELECT data FROM judgment_events "
+                    "WHERE event_type = 'thesis_web_signal' AND ticker = ? "
+                    "AND data LIKE ? ORDER BY created_at DESC LIMIT 5",
+                    (ticker, f'%{assumption[:60]}%')
+                ).fetchall()
+
+                for row in rows:
+                    import json as _json
+                    data = _json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                    web_direction = data.get("signal_direction", "neutral")
+
+                    # Map web direction to comparable status
+                    if web_direction == "negative":
+                        web_predicted = "at_risk"
+                    elif web_direction == "positive":
+                        web_predicted = "intact"
+                    else:
+                        continue  # Neutral signals don't count
+
+                    self.v2db.record_web_signal_accuracy(
+                        ticker=ticker,
+                        assumption=assumption,
+                        web_predicted=web_predicted,
+                        sec_confirmed=sec_status,
+                    )
+
+            except Exception as e:
+                log.debug(f"Web signal validation failed for {ticker}: {e}")
 
     async def run(self, context: dict) -> AgentResult:
         """Run portfolio monitoring.
@@ -534,17 +649,43 @@ class PortfolioAgent(AgentPlugin):
                 except Exception as e:
                     log.warning(f"SEC thesis health check failed for {ticker}: {e}")
 
+        # Persist aggregate health scores as judgment events + run learning loop
+        for tk, health_list in thesis_health_by_ticker.items():
+            score = self._compute_health_score(health_list)
+            if score is not None and self.v2db:
+                try:
+                    checked_at = datetime.utcnow().isoformat()
+                    self.v2db.record_judgment_event(
+                        event_type="thesis_health_score",
+                        ticker=tk,
+                        agent="portfolio",
+                        data={
+                            "score": score,
+                            "checks": health_list,
+                            "checked_at": checked_at,
+                        },
+                        rationale=f"Thesis health score: {score}/100 ({len(health_list)} assumptions checked)",
+                    )
+                except Exception as e:
+                    log.warning(f"Failed to persist thesis health score for {tk}: {e}")
+
+            # Learning loop: validate prior web signals against fresh SEC data
+            try:
+                await self._validate_web_signals(tk, health_list)
+            except Exception as e:
+                log.debug(f"Web signal validation failed for {tk}: {e}")
+
         # Attach thesis_health to each holding
         for h in holdings:
             tk = h["ticker"]
             if tk in thesis_health_by_ticker:
                 h["thesis_health"] = thesis_health_by_ticker[tk]
+                h["thesis_health_score"] = self._compute_health_score(thesis_health_by_ticker[tk])
 
-        # Step 4b: Web research thesis monitoring (weekly only, cost management)
-        weekly = context.get("weekly", False)
+        # Step 4b: Web research thesis monitoring (runs when web_search is available)
         thesis_events_by_ticker: dict[str, dict] = {}
 
-        if weekly and self.web_search:
+        if self.web_search:
             for pos in positions:
                 ticker = pos.get("ticker", "")
                 company_name = pos.get("company_name", pos.get("name", ticker))
@@ -630,25 +771,28 @@ class PortfolioAgent(AgentPlugin):
                         "threshold": check.get("threshold"),
                     })
 
-        # Thesis event breach alerts (from weekly web research)
+        # Thesis event alerts (from web research — corroborated signals)
         for ticker_key, events_data in thesis_events_by_ticker.items():
-            if events_data.get("any_breach"):
-                breached = [
+            if events_data.get("any_at_risk") or events_data.get("any_breach"):
+                at_risk_events = [
                     e for e in events_data.get("thesis_events", [])
-                    if e.get("status") == "breach"
+                    if e.get("status") in ("at_risk", "breach")
                 ]
-                for ev in breached:
+                for ev in at_risk_events:
+                    signal_count = ev.get("signal_count", 0)
                     alerts.append({
-                        "type": "thesis_event_breach",
+                        "type": "thesis_event_at_risk",
                         "ticker": ticker_key,
                         "message": (
-                            f"{ticker_key} thesis assumption challenged: "
+                            f"{ticker_key} thesis assumption at risk "
+                            f"({signal_count} web signals in 90 days): "
                             f"'{ev['assumption'][:80]}'"
                         ),
                         "severity": "warning",
                         "assumption": ev["assumption"],
                         "finding": ev.get("finding", ""),
                         "confidence": ev.get("confidence", 0.0),
+                        "signal_count": signal_count,
                     })
 
         # Step 6: Portfolio snapshot to DB

@@ -708,6 +708,11 @@ function HealthTab({ detail, portfolio }: { detail: any; portfolio: any }) {
             <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
               {intactCount} of {assumptions.length} assumptions intact{monitorCount > 0 ? ` \u00B7 ${monitorCount} under monitoring` : ''}
             </div>
+            {health.checked_at && (
+              <div style={{ fontSize: 9, fontFamily: 'var(--font-data)', color: 'var(--text-muted)', marginTop: 2 }}>
+                Last checked: {new Date(health.checked_at).toLocaleDateString()} {new Date(health.checked_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </div>
+            )}
           </div>
         </div>
         {alert && (
@@ -748,7 +753,14 @@ function HealthTab({ detail, portfolio }: { detail: any; portfolio: any }) {
                     <span className="assumption-trend" style={{ color: trendColor }}>{trendArrow} {a.trend != null ? (a.trend >= 0 ? `+${a.trend}` : a.trend) : ''}</span>
                   </div>
                   {a.detail && (
-                    <div style={{ paddingLeft: 22, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.5 }}>{a.detail}</div>
+                    <div style={{ paddingLeft: 22, fontSize: 10, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                      {a.detail}
+                      {a.signal_count != null && a.signal_count > 0 && (
+                        <span style={{ marginLeft: 8, color: a.signal_count >= 2 ? 'var(--warning)' : 'var(--text-muted)', fontFamily: 'var(--font-data)' }}>
+                          {a.signal_count} web signal{a.signal_count !== 1 ? 's' : ''} in 90 days
+                        </span>
+                      )}
+                    </div>
                   )}
                   {isWarning && a.if_breaks && (
                     <div style={{ paddingLeft: 22, marginTop: 4, fontSize: 10, color: 'var(--text-secondary)', background: 'var(--bg-tertiary)', padding: '4px 8px', borderRadius: 3 }}>

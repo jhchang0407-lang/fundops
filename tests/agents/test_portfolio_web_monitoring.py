@@ -134,8 +134,8 @@ class TestPortfolioWebMonitoring:
         ws.search.assert_called()
 
     @pytest.mark.asyncio
-    async def test_thesis_events_skipped_daily(self):
-        """weekly=False -> thesis events NOT called (cost management)."""
+    async def test_thesis_events_run_without_weekly_flag(self):
+        """weekly=False -> thesis events still run (weekly gate removed)."""
         ws = _make_web_search()
         quotes = _make_quote_source({"PAYC": 150.0})
         agent = PortfolioAgent(fmp=quotes, web_search=ws)
@@ -149,14 +149,13 @@ class TestPortfolioWebMonitoring:
         result = await agent.run({"positions": positions, "weekly": False})
 
         assert result.ok
-        # No thesis events on daily runs
-        assert "thesis_events" not in result.data
-        # web_search should NOT have been called
-        ws.search.assert_not_called()
+        # Thesis events now run on every call (weekly gate removed)
+        assert "thesis_events" in result.data
+        ws.search.assert_called()
 
     @pytest.mark.asyncio
-    async def test_thesis_events_skipped_daily_default(self):
-        """No weekly key in context -> defaults to daily, no thesis events."""
+    async def test_thesis_events_run_default_context(self):
+        """No weekly key in context -> thesis events still run."""
         ws = _make_web_search()
         quotes = _make_quote_source({"PAYC": 150.0})
         agent = PortfolioAgent(fmp=quotes, web_search=ws)
@@ -170,8 +169,9 @@ class TestPortfolioWebMonitoring:
         result = await agent.run({"positions": positions})
 
         assert result.ok
-        assert "thesis_events" not in result.data
-        ws.search.assert_not_called()
+        # Thesis events run on every call
+        assert "thesis_events" in result.data
+        ws.search.assert_called()
 
     @pytest.mark.asyncio
     async def test_thesis_events_no_web_search(self):
@@ -192,8 +192,12 @@ class TestPortfolioWebMonitoring:
         assert "thesis_events" not in result.data
 
     @pytest.mark.asyncio
-    async def test_thesis_event_breach_alert(self):
-        """Web research indicates breach -> thesis_event_breach alert generated."""
+    async def test_thesis_event_negative_signal_monitoring(self):
+        """Web research with negative signal -> 'monitoring' status (single signal, no escalation).
+
+        Web search alone NEVER sets 'breach'. First negative signal gets 'monitoring'.
+        Only 2+ corroborated signals escalate to 'at_risk'.
+        """
         ws = _make_web_search(responses={
             "revenue growth": BREACH_TEXT,
         })
@@ -209,17 +213,17 @@ class TestPortfolioWebMonitoring:
         result = await agent.run({"positions": positions, "weekly": True})
 
         assert result.ok
-        # Should have a thesis_event_breach alert
-        breach_alerts = [
+        # Single web signal -> monitoring, not breach/at_risk, so no alert
+        events = result.data["thesis_events"]["PAYC"]["thesis_events"]
+        assert len(events) == 1
+        assert events[0]["status"] == "monitoring"
+        assert events[0]["signal_direction"] == "negative"
+        # No thesis_event_at_risk alert for single signals
+        at_risk_alerts = [
             a for a in result.data["alerts"]
-            if a["type"] == "thesis_event_breach"
+            if a["type"] == "thesis_event_at_risk"
         ]
-        assert len(breach_alerts) == 1
-        assert breach_alerts[0]["ticker"] == "PAYC"
-        assert breach_alerts[0]["severity"] == "warning"
-        assert "Revenue growth" in breach_alerts[0]["assumption"]
-        # event_type should be "alert" since we have alerts
-        assert result.event_type == "alert"
+        assert len(at_risk_alerts) == 0
 
     @pytest.mark.asyncio
     async def test_thesis_event_intact_no_alert(self):
@@ -239,11 +243,11 @@ class TestPortfolioWebMonitoring:
         result = await agent.run({"positions": positions, "weekly": True})
 
         assert result.ok
-        breach_alerts = [
+        at_risk_alerts = [
             a for a in result.data["alerts"]
-            if a["type"] == "thesis_event_breach"
+            if a["type"] == "thesis_event_at_risk"
         ]
-        assert len(breach_alerts) == 0
+        assert len(at_risk_alerts) == 0
         # Thesis events should still be recorded
         events = result.data["thesis_events"]["PAYC"]["thesis_events"]
         assert events[0]["status"] == "intact"
@@ -385,14 +389,20 @@ class TestPortfolioWebMonitoring:
 
     @pytest.mark.asyncio
     async def test_check_thesis_events_directly(self):
-        """Direct unit test of _check_thesis_events method."""
+        """Direct unit test of _check_thesis_events method.
+
+        With the three-tier system:
+        - Negative web signal (single) -> 'monitoring' (not breach)
+        - Positive web signal -> 'intact'
+        - Web search alone NEVER sets 'breach'
+        """
         call_idx = 0
         ws = AsyncMock()
 
         async def _search(query, context=None):
             nonlocal call_idx
             call_idx += 1
-            # First call: breach text, second call: intact text
+            # First call: negative text, second call: intact text
             if call_idx == 1:
                 return SearchResult(text=BREACH_TEXT, cost=0.01)
             return SearchResult(text=INTACT_TEXT, cost=0.01)
@@ -415,17 +425,24 @@ class TestPortfolioWebMonitoring:
         )
 
         assert "thesis_events" in result
-        assert "any_breach" in result
+        assert "any_at_risk" in result
         assert len(result["thesis_events"]) == 2
-        # First assumption should be breach (BREACH_TEXT)
-        assert result["thesis_events"][0]["status"] == "breach"
+        # First assumption: negative signal but single hit -> "monitoring" (not breach)
+        assert result["thesis_events"][0]["status"] == "monitoring"
+        assert result["thesis_events"][0]["signal_direction"] == "negative"
         # Second assumption should be intact (INTACT_TEXT)
         assert result["thesis_events"][1]["status"] == "intact"
-        assert result["any_breach"] is True
+        assert result["thesis_events"][1]["signal_direction"] == "positive"
+        # No at_risk because no corroboration (single signal)
+        assert result["any_at_risk"] is False
 
     @pytest.mark.asyncio
-    async def test_multiple_positions_with_breaches(self):
-        """Multiple positions, some with breaches -> correct alerts per ticker."""
+    async def test_multiple_positions_negative_signals(self):
+        """Multiple positions, some with negative signals -> monitoring, not breach.
+
+        With the three-tier system, single negative web signals produce
+        'monitoring' status. No breach alerts from web alone.
+        """
         ws = AsyncMock()
 
         async def _search(query, context=None):
@@ -456,10 +473,16 @@ class TestPortfolioWebMonitoring:
         result = await agent.run({"positions": positions, "weekly": True})
 
         assert result.ok
-        breach_alerts = [
+        # BAD should have monitoring status (single negative signal, no corroboration)
+        bad_events = result.data["thesis_events"]["BAD"]["thesis_events"]
+        assert bad_events[0]["status"] == "monitoring"
+        assert bad_events[0]["signal_direction"] == "negative"
+        # GOOD should be intact
+        good_events = result.data["thesis_events"]["GOOD"]["thesis_events"]
+        assert good_events[0]["status"] == "intact"
+        # No at_risk alerts since no corroboration
+        at_risk_alerts = [
             a for a in result.data["alerts"]
-            if a["type"] == "thesis_event_breach"
+            if a["type"] == "thesis_event_at_risk"
         ]
-        # Only BAD should have a breach alert
-        assert len(breach_alerts) == 1
-        assert breach_alerts[0]["ticker"] == "BAD"
+        assert len(at_risk_alerts) == 0

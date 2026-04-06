@@ -588,6 +588,76 @@ class ScreenerV2DB:
                 row["data"] = json.loads(row["data"])
         return rows
 
+    # --- Thesis Health Queries ---
+
+    def get_latest_thesis_health(self, ticker: str) -> dict | None:
+        """Get most recent thesis health score and checks for a ticker."""
+        rows = self._rows_to_dicts(self.conn.execute(
+            "SELECT * FROM judgment_events WHERE event_type = 'thesis_health_score' "
+            "AND ticker = ? ORDER BY created_at DESC LIMIT 1",
+            (ticker,)
+        ))
+        if not rows:
+            return None
+        row = rows[0]
+        if row.get("data") and isinstance(row["data"], str):
+            row["data"] = json.loads(row["data"])
+        return row
+
+    def get_thesis_health_history(self, ticker: str, limit: int = 10) -> list[dict]:
+        """Get thesis health score history for trend display."""
+        rows = self._rows_to_dicts(self.conn.execute(
+            "SELECT data, created_at FROM judgment_events "
+            "WHERE event_type = 'thesis_health_score' AND ticker = ? "
+            "ORDER BY created_at DESC LIMIT ?",
+            (ticker, limit)
+        ))
+        result = []
+        for row in rows:
+            data = row.get("data")
+            if isinstance(data, str):
+                data = json.loads(data)
+            score = data.get("score") if isinstance(data, dict) else None
+            result.append({
+                "score": score,
+                "label": row["created_at"][:10] if row.get("created_at") else "",
+            })
+        result.reverse()  # Oldest first for trend display
+        return result
+
+    def get_web_signal_count(self, ticker: str, assumption: str, days: int = 90) -> int:
+        """Count how many times a web search flagged this assumption negatively in the last N days."""
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+        # Use LIKE for assumption matching (substring match)
+        rows = self.conn.execute(
+            "SELECT COUNT(*) FROM judgment_events "
+            "WHERE event_type = 'thesis_web_signal' AND ticker = ? "
+            "AND created_at >= ? AND data LIKE ?",
+            (ticker, cutoff, f'%{assumption[:60]}%')
+        ).fetchone()
+        return rows[0] if rows else 0
+
+    def record_web_signal_accuracy(self, ticker: str, assumption: str,
+                                    web_predicted: str, sec_confirmed: str) -> int:
+        """Record whether a web search signal was validated by subsequent SEC data.
+
+        This feeds the learning loop: after each SEC filing, compare what web
+        search predicted vs what SEC confirmed.
+        """
+        return self.record_judgment_event(
+            event_type="web_signal_accuracy",
+            ticker=ticker,
+            agent="portfolio",
+            data={
+                "assumption": assumption,
+                "web_predicted": web_predicted,
+                "sec_confirmed": sec_confirmed,
+                "accurate": web_predicted == sec_confirmed,
+            },
+            rationale=f"Web predicted '{web_predicted}', SEC confirmed '{sec_confirmed}' for '{assumption[:60]}'",
+        )
+
     # --- Conversation History ---
 
     def save_conversation_message(self, session_id: str, role: str, content: str,

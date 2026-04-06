@@ -1310,7 +1310,7 @@ async def generate_investment_memo(ticker: str):
 
 @router.post("/library/sync")
 async def run_library_sync():
-    """Trigger library sync — ingest all recent research artifacts."""
+    """Trigger library sync — ingest artifacts + run outcome checker (learning loop)."""
     from backend.agents.library import LibraryAgent
     config = get_config()
     constitution = _load_constitution(config)
@@ -1323,8 +1323,52 @@ async def run_library_sync():
         db=db, v2db=v2db,
     )
 
+    async def _sync_with_learning(ctx):
+        """Ingest artifacts, then run outcome checker + portfolio health refresh."""
+        import logging
+        _log = logging.getLogger("fundops.library")
+
+        # Step 1: Ingest recent research artifacts
+        result = await agent.run(ctx)
+
+        # Step 2: Run outcome checker (learning loop — checks prediction accuracy)
+        try:
+            outcome_agent = get_outcome_checker()
+            outcome_result = await outcome_agent.run(ctx)
+            outcomes_checked = len(outcome_result.data.get("checked", [])) if outcome_result.data else 0
+            if result.data:
+                result.data["outcomes_checked"] = outcomes_checked
+            _log.info(f"Library sync: outcome checker evaluated {outcomes_checked} positions")
+        except Exception as e:
+            _log.warning(f"Outcome checker failed during library sync: {e}")
+            if result.data:
+                result.data["outcomes_checked"] = 0
+
+        # Step 3: Refresh thesis health for held positions
+        try:
+            portfolio_agent = PortfolioAgent(
+                config=config.resolved.get("agents", {}).get("portfolio", {}).get("config", {}),
+                fmp=get_fmp(),
+                yfinance=get_yfinance(),
+                db=get_db(),
+                sec=get_sec(),
+                v2db=get_v2db(),
+            )
+            portfolio_result = await portfolio_agent.run(ctx)
+            health_count = len([
+                h for h in (portfolio_result.data or {}).get("holdings", [])
+                if h.get("thesis_health")
+            ])
+            if result.data:
+                result.data["health_checks_run"] = health_count
+            _log.info(f"Library sync: portfolio health refreshed for {health_count} positions")
+        except Exception as e:
+            _log.warning(f"Portfolio health refresh failed during library sync: {e}")
+
+        return result
+
     jobs = get_job_queue()
-    job_id = await jobs.submit("library", agent.run, {"constitution": constitution})
+    job_id = await jobs.submit("library", _sync_with_learning, {"constitution": constitution})
     return {"job_id": job_id, "status": "running"}
 
 
@@ -1377,6 +1421,9 @@ async def run_portfolio():
         fmp=get_fmp(),
         yfinance=get_yfinance(),
         db=get_db(),
+        sec=get_sec(),
+        v2db=get_v2db(),
+        web_search=get_web_search(),
     )
 
     jobs = get_job_queue()
@@ -2112,25 +2159,55 @@ async def get_ticker_detail(ticker: str):
             "return_sources": metrics.get("return_sources"),
         }
 
-    # Build health data from IC review key_assumptions + thesis quality
+    # Build health data: prefer real thesis health from judgment_events, fall back to IC assumptions
     health = {}
     ic_data = ic_review or {}
     thesis_data = thesis or {}
-    if ic_data.get("key_assumptions") or thesis_data.get("quality"):
-        # Build assumptions list — frontend reads: name/label, score, status, trend, detail, if_breaks
+
+    # Try to load real thesis health from judgment_events
+    real_health = None
+    health_history = []
+    try:
+        v2db_health = get_v2db()
+        real_health = v2db_health.get_latest_thesis_health(t)
+        health_history = v2db_health.get_thesis_health_history(t, limit=10)
+        v2db_health.close()
+    except Exception as e:
+        log.debug(f"Failed to load thesis health for {t}: {e}")
+
+    if real_health and real_health.get("data"):
+        # Real health data exists — use it
+        health_data = real_health["data"]
+        checks = health_data.get("checks", [])
+        score = health_data.get("score")
+        checked_at = health_data.get("checked_at") or real_health.get("created_at")
+
         assumptions = []
-        for a in (ic_data.get("key_assumptions") or []):
-            text = a if isinstance(a, str) else a.get("assumption", str(a))
+        _status_scores = {"intact": 100, "at_risk": 50, "breach": 0, "monitoring": 70, "unknown": 50}
+        for check in checks:
+            assumption_text = check.get("assumption", "")
+            status = check.get("status", "unknown")
+            a_score = _status_scores.get(status, 50)
+            detail_parts = []
+            if check.get("metric") and check.get("current_value") is not None:
+                detail_parts.append(f"Current {check['metric']}: {check['current_value']}")
+            if check.get("threshold") is not None:
+                detail_parts.append(f"Threshold: {check['threshold']}")
+            if check.get("signal_count") and check["signal_count"] > 0:
+                detail_parts.append(f"{check['signal_count']} web signals in 90 days")
+            detail = " | ".join(detail_parts) if detail_parts else f"Status: {status}"
+
             assumptions.append({
-                "name": text,
-                "label": text,
-                "status": "monitoring",
-                "score": 50,
+                "name": assumption_text,
+                "label": assumption_text,
+                "status": status,
+                "score": a_score,
                 "trend": 0,
-                "detail": "Awaiting portfolio health check to verify against current data.",
+                "detail": detail,
+                "signal_count": check.get("signal_count"),
             })
 
-        # Build quality fundamentals — frontend reads: metric, thesis_target, quarters, trend_icon, trend_color
+        # Build quality fundamentals from thesis data
         fundamentals = []
         quality = thesis_data.get("quality") or {}
         for label, key, is_pct in [("Gross Margin", "gross_margin", True), ("ROIC", "roic", True),
@@ -2143,11 +2220,10 @@ async def get_ticker_detail(ticker: str):
                     "metric": label,
                     "thesis_target": display,
                     "quarters": [],
-                    "trend_icon": "→",
+                    "trend_icon": "\u2192",
                     "trend_color": "var(--text-muted)",
                 })
 
-        # What breaks the thesis — frontend reads: condition/name, impact/description, severity, action
         thesis_breakers = []
         if ic_data.get("key_risk"):
             risk_text = ic_data["key_risk"]
@@ -2164,7 +2240,61 @@ async def get_ticker_detail(ticker: str):
             "assumptions": assumptions,
             "fundamentals": fundamentals,
             "thesis_breakers": thesis_breakers,
-            "score": None,  # Only populated when portfolio agent runs thesis health check
+            "score": score,
+            "checked_at": checked_at,
+            "history": health_history,
+        }
+
+    elif ic_data.get("key_assumptions") or thesis_data.get("quality"):
+        # No real health data yet — fall back to IC assumptions with "awaiting check" status
+        assumptions = []
+        for a in (ic_data.get("key_assumptions") or []):
+            text = a if isinstance(a, str) else a.get("assumption", str(a))
+            assumptions.append({
+                "name": text,
+                "label": text,
+                "status": "awaiting_check",
+                "score": None,
+                "trend": 0,
+                "detail": "Awaiting first portfolio health check to verify against current data.",
+            })
+
+        # Build quality fundamentals
+        fundamentals = []
+        quality = thesis_data.get("quality") or {}
+        for label, key, is_pct in [("Gross Margin", "gross_margin", True), ("ROIC", "roic", True),
+                                    ("ROE", "roe", True), ("D/E", "debt_equity", False),
+                                    ("FCF Yield", "fcf_yield", True)]:
+            val = quality.get(key)
+            if val is not None:
+                display = f"{val:.1f}%" if is_pct else f"{val:.2f}"
+                fundamentals.append({
+                    "metric": label,
+                    "thesis_target": display,
+                    "quarters": [],
+                    "trend_icon": "\u2192",
+                    "trend_color": "var(--text-muted)",
+                })
+
+        thesis_breakers = []
+        if ic_data.get("key_risk"):
+            risk_text = ic_data["key_risk"]
+            thesis_breakers.append({
+                "condition": "Key Risk Materializes",
+                "name": "Key Risk Materializes",
+                "description": risk_text,
+                "impact": risk_text,
+                "severity": "critical",
+                "action": "Review position sizing and stop-loss levels.",
+            })
+
+        health = {
+            "assumptions": assumptions,
+            "fundamentals": fundamentals,
+            "thesis_breakers": thesis_breakers,
+            "score": None,
+            "checked_at": None,
+            "history": [],
         }
 
     # Enrich top-level detail fields from metrics when not available from DB
@@ -2184,6 +2314,80 @@ async def get_ticker_detail(ticker: str):
         "health": health,
         "position": position,
         "metrics": metrics,
+    }
+
+
+@router.get("/ticker/{ticker}/health")
+async def get_ticker_health(ticker: str):
+    """Get comprehensive thesis health for a ticker.
+
+    Returns latest health score, assumption statuses, web signals,
+    outcome data, and health history.
+    """
+    import json as _json
+    t = validate_ticker(ticker)
+
+    # Load real thesis health from judgment_events
+    v2db = get_v2db()
+    latest = v2db.get_latest_thesis_health(t)
+    history = v2db.get_thesis_health_history(t, limit=20)
+
+    # Load recent web signals
+    web_signals = []
+    try:
+        signal_events = [
+            e for e in v2db.get_events_by_ticker(t, limit=50)
+            if e.get("event_type") == "thesis_web_signal"
+        ]
+        for evt in signal_events[:10]:
+            data = evt.get("data", {})
+            web_signals.append({
+                "assumption": data.get("assumption", ""),
+                "signal_direction": data.get("signal_direction", "neutral"),
+                "finding": data.get("finding", "")[:200],
+                "confidence": data.get("confidence", 0),
+                "created_at": evt.get("created_at"),
+            })
+    except Exception:
+        pass
+
+    # Load outcome data
+    outcome_data = []
+    try:
+        outcome_events = [
+            e for e in v2db.get_events_by_ticker(t, limit=50)
+            if e.get("event_type") == "web_signal_accuracy"
+        ]
+        for evt in outcome_events[:10]:
+            data = evt.get("data", {})
+            outcome_data.append({
+                "assumption": data.get("assumption", ""),
+                "web_predicted": data.get("web_predicted", ""),
+                "sec_confirmed": data.get("sec_confirmed", ""),
+                "accurate": data.get("accurate", False),
+                "created_at": evt.get("created_at"),
+            })
+    except Exception:
+        pass
+
+    v2db.close()
+
+    health_data = {}
+    if latest and latest.get("data"):
+        data = latest["data"]
+        health_data = {
+            "score": data.get("score"),
+            "checks": data.get("checks", []),
+            "checked_at": data.get("checked_at") or latest.get("created_at"),
+        }
+
+    return {
+        "ticker": t,
+        "health": health_data,
+        "history": history,
+        "web_signals": web_signals,
+        "outcome_accuracy": outcome_data,
+        "has_data": latest is not None,
     }
 
 
