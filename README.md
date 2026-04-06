@@ -22,7 +22,7 @@ Screener → Thesis → IC Review → Memo → Library
 |-------|-------------|
 | **Screener** | Scores a universe of stocks against your strategy. Supports S&P 500, Nasdaq 100, Russell 2000, or custom ticker lists. |
 | **Thesis** | Generates a quick investment thesis with web research, SEC filings analysis, and independent valuation. |
-| **IC Review** | Stress-tests the thesis — applies 70% haircuts to build a bear case, checks if returns still beat S&P 500. |
+| **IC Review** | Stress-tests the thesis with configurable haircuts and hurdle rates. Only investments that survive the bear case pass. |
 | **Memo** | Full deep-dive research report and strategy-tailored investment memo. |
 | **Library** | Stores all research artifacts, runs the learning loop (checks prediction accuracy vs actuals), and enables "Ask the Library" search. |
 | **Portfolio** | Monitors held positions: live P&L, thesis health checks against SEC data, and news-based drift detection. |
