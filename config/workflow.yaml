@@ -1,0 +1,150 @@
+name: My Investment Pipeline
+description: AI-powered investment research and portfolio management
+connectors:
+  market_data:
+    provider: fmp
+    api_key: ${FMP_API_KEY}
+    rate_limit:
+      requests_per_batch: 10
+      delay_between_batches_s: 2
+  filings:
+    provider: sec_edgar
+    user_agent: ${SEC_USER_AGENT}
+  ai_model:
+    provider: openai
+    model: gpt-5-mini
+    api_key: ${OPENAI_API_KEY}
+    monthly_budget: 100
+    warning_threshold: 80
+  web_search:
+    provider: openai
+agents:
+  screener:
+    schedule: weekly
+    description: Screen universe for undervalued opportunities
+    config:
+      hurdle_pct: 15
+      lenses:
+      - name: dislocation
+        weights:
+          cheapness: 0.273
+          quality: 0.364
+          health: 0.1
+          growth: 0.364
+      - name: compounder
+        weights:
+          quality: 0.4
+          cheapness: 0.2
+          growth_durability: 0.4
+      handoff:
+        min_expected_return_pct: 20
+        min_gross_margin_pct: 30
+        must_be_profitable: true
+        max_debt_equity: 3.0
+        max_candidates: 20
+      filters: {}
+      candidate_cap: 20
+      sector_exclusions: []
+      universe: sp500_nasdaq100
+  thesis:
+    description: Quick thesis with web research and independent valuation
+    config:
+      web_search: true
+      web_search_intensity: high
+      condense_research: true
+      max_research_words: 2000
+      return_source_validation: true
+  ic_review:
+    description: IC stress-test gate
+    config:
+      hurdle_base_pct: 20
+      hurdle_bear_pct: 15
+      ai_review: true
+      style_profile: quality-at-a-discount, long-term compounder
+      growth_aware_discounts:
+        high_growth:
+          min_growth: 15
+          min_gm: 60
+          min_discount: 15
+        moderate:
+          min_growth: 10
+          min_gm: 50
+          min_discount: 20
+        steady_state:
+          min_discount: 30
+  memo:
+    description: Full deep-dive analysis
+    config:
+      cost_limit_per_week: 5.0
+      sector_specific_valuation: true
+      output_formats:
+      - research_report
+      - investment_memo
+  library:
+    schedule: daily
+    description: Passive research archive
+    config:
+      memo_sources: []
+      track_performance_vs: SPY
+  portfolio:
+    schedule: daily
+    description: Monitor held positions
+    config:
+      held_only: true
+      thesis_health_check: true
+      alert_on:
+      - concentration_above_pct: 20
+      - drawdown_below_pct: -15
+      - thesis_assumption_breach: true
+  allocator:
+    description: Position sizing and action recommendations
+    config:
+      position_types:
+        tactical:
+          return_source: discount_closing
+          weight_range:
+          - 3
+          - 5
+          hold_years: 1-2
+        core_compounder:
+          return_source: growth
+          weight_range:
+          - 5
+          - 10
+          hold_years: 3-5
+        balanced:
+          return_source: mixed
+          weight_range:
+          - 4
+          - 7
+          hold_years: 2-4
+      concentration_limit_pct: 25
+      min_expected_return_pct: 8
+system:
+  schedules:
+  # Core scheduled agents — Pipeline includes Thesis, IC Review, Memo, and Library
+  - agent: Full Pipeline
+    description: Screener → Thesis (top 20) → IC Review (top 10) → Memo (PASS only) → Library
+    frequency: Weekly
+    time: Sun 9:00 AM
+    status: active
+    cost: ~$0.50
+  - agent: Portfolio Monitor
+    description: Update prices, P&L, thesis health for held positions
+    frequency: Daily
+    time: 7:00 AM
+    status: active
+    cost: Free
+  - agent: Allocator
+    description: Position sizing, concentration alerts, and action items
+    frequency: Weekly
+    time: Sun 12:00 PM
+    status: active
+    cost: Free
+  - agent: Library Sync
+    description: Collect and index new research artifacts
+    frequency: Weekly
+    time: Mon 6:00 AM
+    status: active
+    cost: Free
+  autonomy_mode: suggest

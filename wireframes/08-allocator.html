@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FundOps — Allocator Wireframe</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-primary: #0a0a0f; --bg-secondary: #12131a; --bg-tertiary: #1a1b24; --bg-elevated: #22232e;
+    --text-primary: #e8eaed; --text-secondary: #9aa0a6; --text-muted: #5f6368;
+    --accent: #f5a623; --accent-subtle: rgba(245, 166, 35, 0.12);
+    --positive: #34a853; --negative: #ea4335; --warning: #fbbc04; --info: #4285f4;
+    --border: #2a2b36; --border-hover: #3a3b46;
+    --font-display: 'Geist', -apple-system, sans-serif;
+    --font-ui: 'Inter', -apple-system, sans-serif;
+    --font-data: 'JetBrains Mono', 'SF Mono', monospace;
+    --text-xs: 0.6875rem; --text-sm: 0.8125rem; --text-base: 0.875rem; --text-lg: 1rem; --text-xl: 1.25rem; --text-2xl: 1.375rem; --text-3xl: 2rem;
+    --radius-sm: 4px; --radius-md: 6px; --radius-lg: 8px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg-primary); color: var(--text-primary); font-family: var(--font-ui); font-size: var(--text-base); line-height: 1.5; }
+  .page-shell { display: flex; height: 100vh; overflow: hidden; }
+
+  .sidebar { width: 208px; background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0)), var(--bg-secondary); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+  .sidebar-brand { padding: 18px 14px; font-family: var(--font-data); font-size: var(--text-lg); font-weight: 600; color: var(--accent); letter-spacing: 0.08em; border-bottom: 1px solid var(--border); }
+  .sidebar-brand small { display: block; margin-top: 6px; color: var(--text-muted); font-size: 10px; }
+  .sidebar-nav { flex: 1; padding: 8px 0; }
+  .nav-item { display: flex; align-items: center; gap: 10px; margin: 0 10px 4px; padding: 9px 10px; color: var(--text-secondary); font-size: var(--text-sm); text-decoration: none; border: 1px solid transparent; border-radius: 8px; cursor: pointer; }
+  .nav-item:hover { background: rgba(255,255,255,0.03); }
+  .nav-item.active { color: var(--accent); border-color: rgba(245,166,35,0.25); background: rgba(245,166,35,0.08); }
+  .nav-icon { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; background: rgba(255,255,255,0.04); font-family: var(--font-data); font-size: 10px; }
+  .nav-sep { height: 1px; background: var(--border); margin: 8px 14px; }
+  .sidebar-bottom { padding: 12px; border-top: 1px solid var(--border); }
+  .btn-pipeline { width: 100%; padding: 10px 12px; background: var(--accent); color: #0a0a0f; border: none; border-radius: var(--radius-md); font-family: var(--font-ui); font-size: var(--text-sm); font-weight: 600; cursor: pointer; }
+
+  .main { flex: 1; overflow-y: auto; padding: 16px 20px; }
+
+  .mode-tabs { display: flex; gap: 0; margin-bottom: 16px; border: 1px solid var(--border); border-radius: var(--radius-md); overflow: hidden; width: fit-content; }
+  .mode-tab { padding: 5px 14px; font-size: var(--text-xs); font-family: var(--font-data); color: var(--text-secondary); cursor: pointer; background: var(--bg-secondary); border: none; }
+  .mode-tab.active { background: var(--accent-subtle); color: var(--accent); }
+
+  .btn { padding: 5px 12px; border-radius: var(--radius-md); font-family: var(--font-ui); font-size: var(--text-xs); font-weight: 600; cursor: pointer; border: none; }
+  .btn-accent { background: var(--accent); color: #0a0a0f; }
+  .btn-ghost { background: none; border: 1px solid var(--border); color: var(--text-secondary); }
+  .btn-danger { background: none; border: 1px solid var(--negative); color: var(--negative); }
+
+  .ticker { font-family: var(--font-data); color: var(--accent); text-decoration: none; letter-spacing: 0.05em; font-size: var(--text-xs); font-weight: 500; }
+
+  /* Section headers */
+  .section-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; margin-top: 16px; }
+  .section-header:first-child { margin-top: 0; }
+  .section-title { font-family: var(--font-data); font-size: var(--text-xs); color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; }
+  .section-count { font-family: var(--font-data); font-size: 10px; background: var(--bg-tertiary); color: var(--text-secondary); padding: 1px 6px; border-radius: 9999px; }
+
+  /* Action cards */
+  .action-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 14px 16px; margin-bottom: 8px; }
+  .action-card-urgent { border-left: 3px solid var(--negative); }
+  .action-card-monitor { border-left: 3px solid var(--warning); }
+  .action-card-hold { border-left: 3px solid var(--border); }
+
+  .action-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .action-ticker-row { display: flex; align-items: center; gap: 8px; }
+  .action-badge { font-family: var(--font-data); font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 3px; letter-spacing: 0.03em; }
+  .badge-trim { background: rgba(234,67,53,0.15); color: var(--negative); }
+  .badge-exit { background: rgba(234,67,53,0.25); color: var(--negative); }
+  .badge-add { background: rgba(52,168,83,0.15); color: var(--positive); }
+  .badge-hold { background: rgba(95,99,104,0.15); color: var(--text-muted); }
+  .badge-monitor { background: rgba(251,188,4,0.15); color: var(--warning); }
+
+  .action-why { font-size: var(--text-sm); color: var(--text-secondary); line-height: 1.6; margin-bottom: 10px; }
+
+  /* Scenario comparison */
+  .scenario-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+  .scenario-card { background: var(--bg-tertiary); border-radius: var(--radius-md); padding: 10px 12px; }
+  .scenario-label { font-family: var(--font-data); font-size: 9px; color: var(--text-muted); letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 6px; }
+  .scenario-metrics { display: flex; flex-direction: column; gap: 4px; font-size: var(--text-xs); }
+  .scenario-metric { display: flex; justify-content: space-between; }
+  .scenario-metric-label { color: var(--text-muted); }
+  .scenario-metric-value { font-family: var(--font-data); }
+
+  /* Thesis status inline */
+  .thesis-status { display: flex; align-items: center; gap: 6px; font-size: var(--text-xs); margin-bottom: 10px; padding: 6px 10px; background: var(--bg-tertiary); border-radius: var(--radius-md); }
+  .health-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+  /* Action buttons row */
+  .action-buttons { display: flex; gap: 6px; justify-content: flex-end; }
+
+  /* Sizing alerts */
+  .sizing-alert { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 10px 14px; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; }
+  .sizing-icon { font-size: 14px; flex-shrink: 0; }
+
+  /* AI discussion panel — visually distinct from recommendation cards */
+  .ai-discuss { background: var(--bg-ai); border: 1px solid rgba(245,166,35,0.2); border-left: 3px solid var(--accent); border-radius: var(--radius-lg); padding: 12px 14px; margin-top: 10px; margin-bottom: 4px; position: relative; }
+  .ai-discuss::before { content: ''; position: absolute; inset: 0; border-radius: var(--radius-lg); background: linear-gradient(135deg, rgba(245,166,35,0.04), transparent 60%); pointer-events: none; }
+  .ai-discuss-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid rgba(245,166,35,0.1); }
+  .ai-discuss-messages { max-height: 250px; overflow-y: auto; margin-bottom: 10px; }
+  .ai-msg { margin-bottom: 10px; font-size: var(--text-xs); line-height: 1.7; }
+  .ai-msg-label { font-family: var(--font-data); font-size: 9px; letter-spacing: 0.04em; margin-bottom: 3px; font-weight: 600; }
+  .ai-msg-label-ai { color: var(--accent); }
+  .ai-msg-label-user { color: var(--text-muted); }
+  .ai-msg-text { color: var(--text-secondary); }
+  .ai-msg-text-user { color: var(--text-primary); background: rgba(255,255,255,0.03); padding: 6px 10px; border-radius: var(--radius-md); border: 1px solid var(--border); }
+  .ai-input-row { display: flex; gap: 6px; }
+  .ai-input { flex: 1; padding: 7px 10px; background: rgba(245,166,35,0.05); border: 1px solid rgba(245,166,35,0.15); border-radius: var(--radius-md); color: var(--text-primary); font-family: var(--font-ui); font-size: var(--text-xs); outline: none; }
+  .ai-input:focus { border-color: var(--accent); background: rgba(245,166,35,0.08); }
+  .ai-input::placeholder { color: var(--text-muted); }
+  .btn-discuss { background: var(--accent-subtle); border: 1px solid rgba(245,166,35,0.3); color: var(--accent); padding: 4px 12px; border-radius: var(--radius-md); font-family: var(--font-data); font-size: 10px; font-weight: 500; cursor: pointer; letter-spacing: 0.03em; }
+  .btn-discuss:hover { background: rgba(245,166,35,0.15); border-color: var(--accent); }
+
+  /* Collapsible section */
+  .collapse-toggle { cursor: pointer; user-select: none; }
+  .collapse-toggle:hover { color: var(--text-secondary); }
+  .collapse-content { overflow: hidden; }
+
+  /* Summary KPIs */
+  .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+  .kpi-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 12px 14px; }
+  .kpi-label { font-family: var(--font-data); font-size: var(--text-xs); color: var(--text-muted); letter-spacing: 0.06em; text-transform: uppercase; margin-bottom: 4px; }
+  .kpi-value { font-family: var(--font-display); font-size: var(--text-2xl); font-weight: 700; }
+  .kpi-sub { font-family: var(--font-data); font-size: var(--text-xs); color: var(--text-muted); margin-top: 2px; }
+
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div class="page-shell">
+  <nav class="sidebar">
+    <div class="sidebar-brand">FUNDOPS<small>PERSONAL INVESTMENT OS</small></div>
+    <div class="sidebar-nav">
+      <a class="nav-item" onclick="window.location='01-home-mirror.html'"><span class="nav-icon">MR</span> Home</a>
+      <a class="nav-item" onclick="window.location='04-screener.html'"><span class="nav-icon">SC</span> Screener</a>
+      <a class="nav-item" onclick="window.location='05-research.html'"><span class="nav-icon">RS</span> Research</a>
+      <div class="nav-sep"></div>
+      <a class="nav-item" onclick="window.location='06-portfolio.html'"><span class="nav-icon">PF</span> Portfolio</a>
+      <a class="nav-item" onclick="window.location='07-library.html'"><span class="nav-icon">LB</span> Library</a>
+      <a class="nav-item active" onclick="window.location='08-allocator.html'"><span class="nav-icon">AL</span> Allocator</a>
+      <div class="nav-sep"></div>
+      <a class="nav-item" onclick="window.location='03-settings.html'"><span class="nav-icon">ST</span> Settings</a>
+    </div>
+    <div class="sidebar-bottom"><button class="btn-pipeline" onclick="alert('Pipeline running: Scout → Val → Judge → Memo → Pulse → Vanguard')">Run Pipeline</button></div>
+  </nav>
+
+  <div class="main">
+    <!-- State toggle -->
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+      <div class="mode-tabs">
+        <button class="mode-tab active" onclick="showState('actions')">With Actions</button>
+        <button class="mode-tab" onclick="showState('clean')">No Actions</button>
+        <button class="mode-tab" onclick="showState('empty')">Empty State</button>
+      </div>
+      <span style="font-size: 10px; color: var(--text-muted); font-family: var(--font-data);">WIREFRAME STATES</span>
+    </div>
+
+    <!-- ========== WITH ACTIONS ========== -->
+    <div id="state-actions">
+      <!-- Header -->
+      <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
+        <div>
+          <div style="font-family: var(--font-data); font-size: var(--text-xs); color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px;">ALLOCATOR</div>
+          <h1 style="font-family: var(--font-display); font-size: var(--text-xl); font-weight: 600;">Position Recommendations</h1>
+          <div style="font-size: var(--text-sm); color: var(--text-secondary);">
+            Last run <span style="font-family: var(--font-data);">2h ago</span> . 2 actions required . 1 monitoring . 11 no action
+          </div>
+        </div>
+        <div style="display: flex; gap: 6px;">
+          <button class="btn btn-ghost">View Policy</button>
+          <button class="btn btn-accent">Run Allocator</button>
+        </div>
+      </div>
+
+      <!-- KPIs -->
+      <div class="kpi-row">
+        <div class="kpi-card">
+          <div class="kpi-label">ACTIONS PENDING</div>
+          <div class="kpi-value" style="color: var(--negative);">3</div>
+          <div class="kpi-sub">2 urgent, 1 monitor</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">CONCENTRATION</div>
+          <div class="kpi-value" style="color: var(--negative);">17.4%</div>
+          <div class="kpi-sub">RCAT exceeds 10% limit</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">CASH AVAILABLE</div>
+          <div class="kpi-value">$42K</div>
+          <div class="kpi-sub">5.5% of portfolio</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">AVG EXPECTED RETURN</div>
+          <div class="kpi-value" style="color: var(--positive);">21.3%</div>
+          <div class="kpi-sub">portfolio-weighted</div>
+        </div>
+      </div>
+
+      <!-- Sizing alerts -->
+      <div class="sizing-alert" style="border-left: 3px solid var(--negative);">
+        <span class="sizing-icon" style="color: var(--negative);">&#9888;</span>
+        <div style="flex: 1;">
+          <div style="font-size: var(--text-sm); font-weight: 500;">Concentration breach: <span class="ticker">RCAT</span> at 17.4%</div>
+          <div style="font-size: var(--text-xs); color: var(--text-muted);">Policy limit is 10% for tactical positions. Recommend trimming to 8% ($62K to sell).</div>
+        </div>
+      </div>
+      <div class="sizing-alert" style="border-left: 3px solid var(--warning);">
+        <span class="sizing-icon" style="color: var(--warning);">&#9679;</span>
+        <div style="flex: 1;">
+          <div style="font-size: var(--text-sm); font-weight: 500;">Underweight opportunity: <span class="ticker">DDOG</span> at 2.9%</div>
+          <div style="font-size: var(--text-xs); color: var(--text-muted);">IC conviction 4/5 with 34.7% return since entry. Consider adding to target 5% weight ($16K to buy).</div>
+        </div>
+      </div>
+
+      <!-- ===== ACTION REQUIRED SECTION ===== -->
+      <div class="section-header">
+        <span class="section-title" style="color: var(--negative);">ACTION REQUIRED</span>
+        <span class="section-count" style="background: rgba(234,67,53,0.15); color: var(--negative);">2</span>
+      </div>
+
+      <!-- TRIM: RCAT -->
+      <div class="action-card action-card-urgent">
+        <div class="action-header">
+          <div class="action-ticker-row">
+            <span style="font-family: var(--font-data); font-size: var(--text-lg); font-weight: 600; color: var(--accent); letter-spacing: 0.05em;">RCAT</span>
+            <span style="font-size: var(--text-xs); color: var(--text-muted);">Red Cat Holdings</span>
+            <span class="action-badge badge-trim">TRIM</span>
+          </div>
+          <div style="font-family: var(--font-data); font-size: var(--text-xs); color: var(--text-muted);">
+            Weight: <span style="color: var(--negative);">17.4%</span> &#8594; Target: <span>8.0%</span>
+          </div>
+        </div>
+
+        <div class="action-why">
+          Concentration breach. RCAT is a tactical position at 17.4% weight, well above the 10% policy limit for non-core holdings. Thesis health has declined to 31/100 with the defense contract delay. The risk/reward no longer justifies outsized exposure.
+        </div>
+
+        <div class="thesis-status">
+          <span class="health-dot" style="background: var(--negative);"></span>
+          <span style="color: var(--text-muted);">Thesis health</span>
+          <span style="font-family: var(--font-data); color: var(--negative);">31/100</span>
+          <span style="color: var(--negative); font-size: 10px;">&#8595;</span>
+          <span style="color: var(--text-muted); margin-left: 8px;">P&L</span>
+          <span style="font-family: var(--font-data); color: var(--negative);">-26.4%</span>
+          <span style="color: var(--text-muted); margin-left: 8px;">Type</span>
+          <span style="font-family: var(--font-data);">tactical</span>
+        </div>
+
+        <div class="scenario-row">
+          <div class="scenario-card">
+            <div class="scenario-label">IF YOU TRIM TO 8%</div>
+            <div class="scenario-metrics">
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Sell amount</span>
+                <span class="scenario-metric-value">$62,400</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Shares to sell</span>
+                <span class="scenario-metric-value">10,230</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Remaining weight</span>
+                <span class="scenario-metric-value">8.0%</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Realized loss</span>
+                <span class="scenario-metric-value" style="color: var(--negative);">-$22.4K</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Portfolio risk</span>
+                <span class="scenario-metric-value" style="color: var(--positive);">within limits</span>
+              </div>
+            </div>
+          </div>
+          <div class="scenario-card">
+            <div class="scenario-label">IF YOU HOLD</div>
+            <div class="scenario-metrics">
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Concentration risk</span>
+                <span class="scenario-metric-value" style="color: var(--negative);">17.4% (breach)</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Thesis health trend</span>
+                <span class="scenario-metric-value" style="color: var(--negative);">declining</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Expected return (bear)</span>
+                <span class="scenario-metric-value" style="color: var(--negative);">-8.2%</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Expected return (base)</span>
+                <span class="scenario-metric-value" style="color: var(--warning);">+6.1%</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Next catalyst</span>
+                <span class="scenario-metric-value">contract decision Q2</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- AI Discussion (open, with sample conversation) -->
+        <div class="ai-discuss" id="rcat-discuss">
+          <div class="ai-discuss-header">
+            <span style="font-family: var(--font-data); font-size: 10px; color: var(--accent); letter-spacing: 0.06em; font-weight: 600;">&#9672; DISCUSS WITH AI</span>
+            <span style="font-size: 10px; color: var(--text-muted);">Full context: position, thesis, health, scenarios, portfolio policy</span>
+          </div>
+          <div class="ai-discuss-messages">
+            <div class="ai-msg">
+              <div class="ai-msg-label ai-msg-label-user">YOU</div>
+              <div class="ai-msg-text ai-msg-text-user">What if I only trim to 12% instead of 8%? The contract decision is in Q2, I don't want to sell the bottom.</div>
+            </div>
+            <div class="ai-msg">
+              <div class="ai-msg-label ai-msg-label-ai">FUNDOPS</div>
+              <div class="ai-msg-text">
+                Trimming to 12% instead of 8% means selling ~5,400 shares ($33K) instead of 10,230 ($62K). You'd still be above the 10% policy limit for tactical positions, but the breach is smaller. Here's the trade-off:<br><br>
+                <strong style="color: var(--text-primary);">Upside:</strong> If the contract decision is positive in Q2, you keep more exposure to the rally. At current thesis, a positive catalyst could push RCAT +40-60%.<br><br>
+                <strong style="color: var(--text-primary);">Downside:</strong> Thesis health is 31 and declining. If the contract is delayed or lost, you're holding a 12% position in a name with broken thesis. The max loss from 12% vs 8% is an additional $25K in a worst case.<br><br>
+                <strong style="color: var(--accent);">My read:</strong> The risk/reward favors trimming to <strong>10%</strong> (not 8%, not 12%). This gets you within policy, reduces concentration risk, but keeps meaningful upside exposure to the Q2 catalyst. That's selling ~7,800 shares ($47K).
+              </div>
+            </div>
+            <div class="ai-msg">
+              <div class="ai-msg-label ai-msg-label-user">YOU</div>
+              <div class="ai-msg-text ai-msg-text-user">What about the tax hit if I sell at a loss here?</div>
+            </div>
+            <div class="ai-msg">
+              <div class="ai-msg-label ai-msg-label-ai">FUNDOPS</div>
+              <div class="ai-msg-text">
+                Good question. You bought at $8.29, current price is $6.10. That's a -$2.19/share loss. If you trim 7,800 shares to get to 10%, that's a realized loss of <span style="font-family: var(--font-data); color: var(--positive);">-$17,082</span>. In the US, this is actually a <strong style="color: var(--positive);">tax benefit</strong> — you can offset capital gains from your winners (CHKP +$15.6K, DDOG +$5.2K) and reduce your tax liability. The loss harvest here effectively makes the trim cheaper than it looks on paper.
+              </div>
+            </div>
+          </div>
+          <div class="ai-input-row">
+            <input class="ai-input" placeholder="Ask about timing, tax implications, alternative sizing, what-if scenarios..." />
+            <button class="btn btn-accent" style="padding: 6px 12px; font-size: var(--text-xs);">Ask</button>
+          </div>
+        </div>
+
+        <div class="action-buttons" style="margin-top: 8px;">
+          <button class="btn btn-ghost" style="font-size: var(--text-xs);">Dismiss</button>
+          <button class="btn btn-danger" style="font-size: var(--text-xs);">Mark as Done (trimmed)</button>
+        </div>
+      </div>
+
+      <!-- EXIT: consider PAYC -->
+      <div class="action-card action-card-urgent">
+        <div class="action-header">
+          <div class="action-ticker-row">
+            <span style="font-family: var(--font-data); font-size: var(--text-lg); font-weight: 600; color: var(--accent); letter-spacing: 0.05em;">PAYC</span>
+            <span style="font-size: var(--text-xs); color: var(--text-muted);">Paycom Software</span>
+            <span class="action-badge badge-exit">EXIT</span>
+          </div>
+          <div style="font-family: var(--font-data); font-size: var(--text-xs); color: var(--text-muted);">
+            Weight: <span>5.3%</span> &#8594; Target: <span>0%</span>
+          </div>
+        </div>
+
+        <div class="action-why">
+          Thesis breach. Revenue growth assumption broken (actual -3.2% vs required >5%). Thesis health declined from 72 to 52 over 4 weeks. The original thesis was predicated on stable mid-single-digit growth funding the buyback — that's no longer intact. Capital is better deployed in higher-conviction names.
+        </div>
+
+        <div class="thesis-status">
+          <span class="health-dot" style="background: var(--warning);"></span>
+          <span style="color: var(--text-muted);">Thesis health</span>
+          <span style="font-family: var(--font-data); color: var(--warning);">52/100</span>
+          <span style="color: var(--negative); font-size: 10px;">&#8595;</span>
+          <span style="color: var(--text-muted); margin-left: 8px;">P&L</span>
+          <span style="font-family: var(--font-data); color: var(--negative);">-9.2%</span>
+          <span style="color: var(--text-muted); margin-left: 8px;">Type</span>
+          <span style="font-family: var(--font-data);">core</span>
+        </div>
+
+        <div class="scenario-row">
+          <div class="scenario-card">
+            <div class="scenario-label">IF YOU EXIT</div>
+            <div class="scenario-metrics">
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Sell amount</span>
+                <span class="scenario-metric-value">$35,400</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Realized loss</span>
+                <span class="scenario-metric-value" style="color: var(--negative);">-$3,600</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Cash freed</span>
+                <span class="scenario-metric-value" style="color: var(--positive);">$35.4K</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Redeploy to</span>
+                <span class="scenario-metric-value" style="color: var(--accent);">DDOG (+5%), CHKP (+3%)</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Portfolio return impact</span>
+                <span class="scenario-metric-value" style="color: var(--positive);">+1.8pp expected</span>
+              </div>
+            </div>
+          </div>
+          <div class="scenario-card">
+            <div class="scenario-label">IF YOU HOLD</div>
+            <div class="scenario-metrics">
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Thesis health trend</span>
+                <span class="scenario-metric-value" style="color: var(--negative);">declining (-20 in 4w)</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Revenue growth</span>
+                <span class="scenario-metric-value" style="color: var(--negative);">-3.2% (breached)</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Expected return (bear)</span>
+                <span class="scenario-metric-value" style="color: var(--negative);">-18.4%</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Expected return (base)</span>
+                <span class="scenario-metric-value" style="color: var(--warning);">+4.2%</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Next catalyst</span>
+                <span class="scenario-metric-value">Q1 earnings in 6 weeks</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="action-buttons">
+          <button class="btn-discuss" onclick="toggleEl('payc-discuss')">Discuss with AI</button>
+          <button class="btn btn-ghost" style="font-size: var(--text-xs);">Dismiss</button>
+          <button class="btn btn-danger" style="font-size: var(--text-xs);">Mark as Done (exited)</button>
+        </div>
+
+        <!-- AI Discussion (collapsed by default) -->
+        <div class="ai-discuss hidden" id="payc-discuss">
+          <div class="ai-discuss-header">
+            <span style="font-family: var(--font-data); font-size: 9px; color: var(--accent); letter-spacing: 0.06em;">DISCUSS WITH AI</span>
+            <span style="font-size: 10px; color: var(--text-muted);">AI has full context: position, thesis, health, scenarios</span>
+          </div>
+          <div class="ai-discuss-messages"></div>
+          <div class="ai-input-row">
+            <input class="ai-input" placeholder="Should I wait for Q1 earnings? What if growth recovers? Tax implications of exiting..." />
+            <button class="btn btn-accent" style="padding: 6px 12px; font-size: var(--text-xs);">Ask</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== MONITORING SECTION ===== -->
+      <div class="section-header">
+        <span class="section-title" style="color: var(--warning);">MONITORING</span>
+        <span class="section-count" style="background: rgba(251,188,4,0.15); color: var(--warning);">1</span>
+      </div>
+
+      <!-- ADD ON WEAKNESS: DDOG -->
+      <div class="action-card action-card-monitor">
+        <div class="action-header">
+          <div class="action-ticker-row">
+            <span style="font-family: var(--font-data); font-size: var(--text-lg); font-weight: 600; color: var(--accent); letter-spacing: 0.05em;">DDOG</span>
+            <span style="font-size: var(--text-xs); color: var(--text-muted);">Datadog</span>
+            <span class="action-badge badge-add">ADD ON WEAKNESS</span>
+          </div>
+          <div style="font-family: var(--font-data); font-size: var(--text-xs); color: var(--text-muted);">
+            Weight: <span>2.9%</span> &#8594; Target: <span>5.0%</span>
+          </div>
+        </div>
+
+        <div class="action-why">
+          High-conviction tactical position trading below target weight. IC passed with 4/5 conviction. If price pulls back to $115 (10% discount from current), add $16K to bring weight to 5%. Strong thesis health with expanding product surface.
+        </div>
+
+        <div class="thesis-status">
+          <span class="health-dot" style="background: var(--positive);"></span>
+          <span style="color: var(--text-muted);">Thesis health</span>
+          <span style="font-family: var(--font-data); color: var(--positive);">75/100</span>
+          <span style="color: var(--text-muted); margin-left: 8px;">P&L</span>
+          <span style="font-family: var(--font-data); color: var(--positive);">+34.7%</span>
+          <span style="color: var(--text-muted); margin-left: 8px;">Trigger</span>
+          <span style="font-family: var(--font-data);">$115 (-10%)</span>
+        </div>
+
+        <div class="scenario-row">
+          <div class="scenario-card">
+            <div class="scenario-label">IF TRIGGER HIT &amp; YOU ADD</div>
+            <div class="scenario-metrics">
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Buy amount</span>
+                <span class="scenario-metric-value">$16,000</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">New avg cost</span>
+                <span class="scenario-metric-value">$102.50</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">New weight</span>
+                <span class="scenario-metric-value">5.0%</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Expected return (base)</span>
+                <span class="scenario-metric-value" style="color: var(--positive);">+31.2%</span>
+              </div>
+            </div>
+          </div>
+          <div class="scenario-card">
+            <div class="scenario-label">IF YOU DO NOTHING</div>
+            <div class="scenario-metrics">
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Current weight</span>
+                <span class="scenario-metric-value">2.9%</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Opportunity cost</span>
+                <span class="scenario-metric-value" style="color: var(--warning);">underexposed to best performer</span>
+              </div>
+              <div class="scenario-metric">
+                <span class="scenario-metric-label">Cash sitting idle</span>
+                <span class="scenario-metric-value">$42K earning 0%</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="action-buttons">
+          <button class="btn-discuss" onclick="toggleEl('ddog-discuss')">Discuss with AI</button>
+          <button class="btn btn-ghost" style="font-size: var(--text-xs);">Dismiss</button>
+          <button class="btn btn-ghost" style="font-size: var(--text-xs);">Set alert at $115</button>
+          <button class="btn btn-accent" style="font-size: var(--text-xs);">Mark as Done (added)</button>
+        </div>
+
+        <!-- AI Discussion (collapsed) -->
+        <div class="ai-discuss hidden" id="ddog-discuss">
+          <div class="ai-discuss-header">
+            <span style="font-family: var(--font-data); font-size: 9px; color: var(--accent); letter-spacing: 0.06em;">DISCUSS WITH AI</span>
+            <span style="font-size: 10px; color: var(--text-muted);">AI has full context: position, thesis, health, scenarios</span>
+          </div>
+          <div class="ai-discuss-messages"></div>
+          <div class="ai-input-row">
+            <input class="ai-input" placeholder="Should I add now or wait? What's the right entry price? How does this affect concentration..." />
+            <button class="btn btn-accent" style="padding: 6px 12px; font-size: var(--text-xs);">Ask</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== NO ACTION SECTION (collapsed by default) ===== -->
+      <div class="section-header collapse-toggle" onclick="toggleNoAction()">
+        <span class="section-title">NO ACTION</span>
+        <span class="section-count">11</span>
+        <span id="no-action-arrow" style="font-size: 10px; color: var(--text-muted); transition: transform 0.2s;">&#9654;</span>
+      </div>
+
+      <div id="no-action-content" class="collapse-content hidden">
+        <!-- Compact hold cards -->
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+          <div class="action-card action-card-hold" style="padding: 10px 12px;">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="ticker">CHKP</span>
+                <span class="action-badge badge-hold">HOLD</span>
+              </div>
+              <span style="font-family: var(--font-data); font-size: var(--text-xs); color: var(--positive);">8.2%</span>
+            </div>
+            <div style="font-size: 10px; color: var(--text-muted); margin-top: 3px;">Health 82 . Target 8% . On track</div>
+          </div>
+          <div class="action-card action-card-hold" style="padding: 10px 12px;">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="ticker">PANW</span>
+                <span class="action-badge badge-hold">HOLD</span>
+              </div>
+              <span style="font-family: var(--font-data); font-size: var(--text-xs); color: var(--positive);">4.6%</span>
+            </div>
+            <div style="font-size: 10px; color: var(--text-muted); margin-top: 3px;">Health 70 . Target 5% . On track</div>
+          </div>
+          <div class="action-card action-card-hold" style="padding: 10px 12px;">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="ticker">FISV</span>
+                <span class="action-badge badge-hold">HOLD</span>
+              </div>
+              <span style="font-family: var(--font-data); font-size: var(--text-xs); color: var(--positive);">5.4%</span>
+            </div>
+            <div style="font-size: 10px; color: var(--text-muted); margin-top: 3px;">Health 78 . Target 5% . On track</div>
+          </div>
+          <div class="action-card action-card-hold" style="padding: 10px 12px;">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="ticker">MSFT</span>
+                <span class="action-badge badge-hold">HOLD</span>
+              </div>
+              <span style="font-family: var(--font-data); font-size: var(--text-xs); color: var(--text-secondary);">6.1%</span>
+            </div>
+            <div style="font-size: 10px; color: var(--text-muted); margin-top: 3px;">Health 85 . Target 6% . On track</div>
+          </div>
+          <div class="action-card action-card-hold" style="padding: 10px 12px;">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="ticker">V</span>
+                <span class="action-badge badge-hold">HOLD</span>
+              </div>
+              <span style="font-family: var(--font-data); font-size: var(--text-xs); color: var(--text-secondary);">4.8%</span>
+            </div>
+            <div style="font-size: 10px; color: var(--text-muted); margin-top: 3px;">Health 80 . Target 5% . On track</div>
+          </div>
+          <div class="action-card action-card-hold" style="padding: 10px 12px;">
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="ticker">INTU</span>
+                <span class="action-badge badge-hold">HOLD</span>
+              </div>
+              <span style="font-family: var(--font-data); font-size: var(--text-xs); color: var(--text-secondary);">3.8%</span>
+            </div>
+            <div style="font-size: 10px; color: var(--text-muted); margin-top: 3px;">Health 72 . Target 4% . On track</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== NO ACTIONS (CLEAN STATE) ========== -->
+    <div id="state-clean" class="hidden">
+      <div style="margin-bottom: 10px;">
+        <div style="font-family: var(--font-data); font-size: var(--text-xs); color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px;">ALLOCATOR</div>
+        <h1 style="font-family: var(--font-display); font-size: var(--text-xl); font-weight: 600;">Position Recommendations</h1>
+        <div style="font-size: var(--text-sm); color: var(--text-secondary);">
+          Last run <span style="font-family: var(--font-data);">30m ago</span> . No actions required
+        </div>
+      </div>
+
+      <div class="kpi-row">
+        <div class="kpi-card">
+          <div class="kpi-label">ACTIONS PENDING</div>
+          <div class="kpi-value" style="color: var(--positive);">0</div>
+          <div class="kpi-sub">all positions in spec</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">MAX CONCENTRATION</div>
+          <div class="kpi-value">8.2%</div>
+          <div class="kpi-sub">CHKP (limit: 10%)</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">CASH</div>
+          <div class="kpi-value">$42K</div>
+          <div class="kpi-sub">5.5% of portfolio</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-label">AVG EXPECTED RETURN</div>
+          <div class="kpi-value" style="color: var(--positive);">21.3%</div>
+          <div class="kpi-sub">portfolio-weighted</div>
+        </div>
+      </div>
+
+      <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 24px; text-align: center; margin-top: 8px;">
+        <div style="color: var(--positive); font-size: 20px; margin-bottom: 8px;">&#10003;</div>
+        <div style="font-size: var(--text-sm); font-weight: 500; margin-bottom: 4px;">Portfolio is balanced</div>
+        <div style="font-size: var(--text-xs); color: var(--text-secondary);">All positions are within policy limits. No concentration breaches, no thesis alerts, no recommended actions.</div>
+      </div>
+
+      <!-- Still show holds in compact form -->
+      <div class="section-header" style="margin-top: 16px;">
+        <span class="section-title">ALL POSITIONS</span>
+        <span class="section-count">14</span>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px;">
+        <div class="action-card action-card-hold" style="padding: 8px 10px;">
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <span class="ticker">CHKP</span>
+            <span style="font-family: var(--font-data); font-size: 10px; color: var(--positive);">8.2%</span>
+          </div>
+        </div>
+        <div class="action-card action-card-hold" style="padding: 8px 10px;">
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <span class="ticker">MSFT</span>
+            <span style="font-family: var(--font-data); font-size: 10px;">6.1%</span>
+          </div>
+        </div>
+        <div class="action-card action-card-hold" style="padding: 8px 10px;">
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <span class="ticker">FISV</span>
+            <span style="font-family: var(--font-data); font-size: 10px;">5.4%</span>
+          </div>
+        </div>
+        <div class="action-card action-card-hold" style="padding: 8px 10px;">
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <span class="ticker">PAYC</span>
+            <span style="font-family: var(--font-data); font-size: 10px;">5.3%</span>
+          </div>
+        </div>
+        <div class="action-card action-card-hold" style="padding: 8px 10px;">
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <span class="ticker">V</span>
+            <span style="font-family: var(--font-data); font-size: 10px;">4.8%</span>
+          </div>
+        </div>
+        <div class="action-card action-card-hold" style="padding: 8px 10px;">
+          <div style="display: flex; align-items: center; justify-content: space-between;">
+            <span class="ticker">PANW</span>
+            <span style="font-family: var(--font-data); font-size: 10px;">4.6%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== EMPTY STATE ========== -->
+    <div id="state-empty" class="hidden">
+      <div style="margin-bottom: 10px;">
+        <div style="font-family: var(--font-data); font-size: var(--text-xs); color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px;">ALLOCATOR</div>
+        <h1 style="font-family: var(--font-display); font-size: var(--text-xl); font-weight: 600;">Position Recommendations</h1>
+      </div>
+      <div style="background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 40px; text-align: center;">
+        <div style="font-size: var(--text-lg); font-weight: 500; margin-bottom: 6px;">No portfolio to analyze</div>
+        <div style="font-size: var(--text-sm); color: var(--text-secondary); margin-bottom: 16px; max-width: 400px; margin-left: auto; margin-right: auto;">
+          The allocator needs a portfolio to generate sizing recommendations. Add your positions first, then run the allocator to get action items.
+        </div>
+        <div style="display: flex; gap: 8px; justify-content: center;">
+          <button class="btn btn-accent" onclick="window.location='06-portfolio.html'">Go to Portfolio</button>
+          <button class="btn btn-ghost">View Policy</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function showState(state) {
+  ['actions', 'clean', 'empty'].forEach(s => {
+    document.getElementById('state-' + s).classList.toggle('hidden', s !== state);
+  });
+  document.querySelectorAll('.mode-tab').forEach((tab, i) => {
+    tab.classList.toggle('active', ['actions', 'clean', 'empty'][i] === state);
+  });
+}
+
+function toggleEl(id) {
+  var el = document.getElementById(id);
+  if (el) el.classList.toggle('hidden');
+}
+
+function toggleNoAction() {
+  const content = document.getElementById('no-action-content');
+  const arrow = document.getElementById('no-action-arrow');
+  const isHidden = content.classList.contains('hidden');
+  content.classList.toggle('hidden');
+  arrow.style.transform = isHidden ? 'rotate(90deg)' : '';
+}
+</script>
+<script>document.addEventListener("click",function(e){var t=e.target.closest(".ticker");if(t&&!e.target.closest("button")&&!t.closest(".toc-item")){window.location="09-ticker-detail.html";}});</script>
+</body>
+</html>

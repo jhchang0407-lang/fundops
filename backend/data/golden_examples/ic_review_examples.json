@@ -1,0 +1,38 @@
+[
+  {
+    "verdict": "PASS",
+    "ticker": "EXAMPLE_PASS1",
+    "sector": "technology",
+    "base_return": 28.5,
+    "bear_return": 18.2,
+    "conviction": 4,
+    "reasoning": "Base case clears 20% hurdle with room. Bear case (70% haircut on growth/margin) still delivers 18.2%, well above 15% floor. 25% discount exceeds 15% floor for high-growth compounders. Quality metrics are strong (75% GM, 22% ROIC). Key risk is customer concentration but NRR provides a buffer."
+  },
+  {
+    "verdict": "PASS",
+    "ticker": "EXAMPLE_PASS2",
+    "sector": "industrials",
+    "base_return": 25.0,
+    "bear_return": 16.5,
+    "conviction": 3,
+    "reasoning": "Solid compounder with sticky revenue base. Bear case delivers 16.5% even with 70% haircuts. 27% discount exceeds 20% floor for moderate growth. ROIC of 15% is durable given aftermarket mix. Lower conviction (3/5) due to cyclical exposure."
+  },
+  {
+    "verdict": "NO_PASS",
+    "ticker": "EXAMPLE_FAIL1",
+    "sector": "consumer",
+    "base_return": 18.0,
+    "bear_return": 8.5,
+    "conviction": 2,
+    "reasoning": "Base case of 18% does not clear the 20% hurdle. Bear case of 8.5% barely beats the S&P benchmark and fails the 15% floor. The thesis relies heavily on margin expansion from 32% to 38% GM, but the company has no pricing power history to support this. Value trap risk is elevated: cheap for a reason."
+  },
+  {
+    "verdict": "NO_PASS",
+    "ticker": "EXAMPLE_FAIL2",
+    "sector": "healthcare",
+    "base_return": 22.0,
+    "bear_return": 6.0,
+    "conviction": 1,
+    "reasoning": "While base case technically clears the hurdle at 22%, bear case collapses to 6% which is below the S&P benchmark. The return is entirely dependent on pipeline approval (binary outcome). This violates the anti-binary-pharma preference. Discount of 40% is justified by patent cliff risk, not a temporary dislocation."
+  }
+]
