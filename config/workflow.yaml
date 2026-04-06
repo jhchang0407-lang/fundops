@@ -27,15 +27,15 @@ agents:
       lenses:
       - name: dislocation
         weights:
-          cheapness: 0.273
-          quality: 0.364
+          cheapness: 0.647
+          quality: 0.275
           health: 0.1
-          growth: 0.364
+          growth: 0.078
       - name: compounder
         weights:
-          quality: 0.4
-          cheapness: 0.2
-          growth_durability: 0.4
+          quality: 0.35
+          cheapness: 0.55
+          growth_durability: 0.1
       handoff:
         min_expected_return_pct: 20
         min_gross_margin_pct: 30
@@ -122,9 +122,9 @@ agents:
       min_expected_return_pct: 8
 system:
   schedules:
-  # Core scheduled agents — Pipeline includes Thesis, IC Review, Memo, and Library
   - agent: Full Pipeline
-    description: Screener → Thesis (top 20) → IC Review (top 10) → Memo (PASS only) → Library
+    description: "Screener \u2192 Thesis (top 20) \u2192 IC Review (top 10) \u2192\
+      \ Memo (PASS only) \u2192 Library"
     frequency: Weekly
     time: Sun 9:00 AM
     status: active

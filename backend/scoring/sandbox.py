@@ -93,9 +93,58 @@ def validate_ast(code: str) -> list[str]:
 
 # --- Restricted Globals ---
 
+_FIELD_ALIASES: dict[str, list[str]] = {
+    # snake_case canonical -> camelCase alternatives from screener data
+    "gross_margin": ["grossProfitMargin", "gross_profit_margin"],
+    "operating_margin": ["operatingMargin", "operating_profit_margin"],
+    "net_margin": ["netProfitMargin", "net_profit_margin"],
+    "fcf_yield": ["fcfYield", "fcf_yield_pct"],
+    "fcf_margin": ["fcfMargin"],
+    "fcf_conversion": ["fcfConversion"],
+    "roic": ["returnOnInvestedCapital"],
+    "roe": ["returnOnEquity"],
+    "debt_equity": ["debtEquity"],
+    "revenue_growth": ["revenueGrowth"],
+    "revenue_growth_3y": ["revenueGrowth3y"],
+    "revenue_growth_5y": ["revenueGrowth5y"],
+    "earnings_growth": ["earningsGrowth"],
+    "earnings_yield": ["earningsYield"],
+    "market_cap": ["marketCap"],
+    "ebitda_margin": ["ebitdaMargin"],
+    "implied_growth": ["impliedGrowth"],
+    "interest_coverage": ["interestCoverage"],
+    "income_quality": ["incomeQuality"],
+    "owner_earnings_per_share": ["ownerEarningsPerShare"],
+    "discount_pct": ["discount", "discount_to_fv"],
+    "growth_gap": ["growthGap"],
+    "quality_score": ["qualityScore"],
+    "expected_return": ["expectedReturn"],
+    "debt_to_ebitda": ["debtToEbitda", "net_debt_ebitda"],
+    "company_name": ["companyName"],
+}
+
+# Build reverse lookup: camelCase -> canonical
+_REVERSE_ALIASES: dict[str, str] = {}
+for _canon, _alts in _FIELD_ALIASES.items():
+    for _alt in _alts:
+        _REVERSE_ALIASES[_alt] = _canon
+
+
 def _safe_get(stock: dict, key: str, default: float = 0.0) -> float:
-    """Safely get a numeric value from stock dict."""
+    """Safely get a numeric value from stock dict.
+
+    Handles field name aliasing: scoring code uses snake_case canonical names
+    (e.g. 'gross_margin') but screener data may use camelCase ('grossProfitMargin').
+    Tries the canonical key first, then known aliases.
+    """
     val = stock.get(key)
+    if val is None:
+        # Try aliases: canonical -> camelCase alternatives
+        aliases = _FIELD_ALIASES.get(key, [])
+        for alias in aliases:
+            val = stock.get(alias)
+            if val is not None:
+                break
     if val is None:
         return default
     try:
@@ -282,8 +331,15 @@ import math
 import statistics
 import sys
 
+_FIELD_ALIASES = {aliases_json}
+
 def safe_get(stock, key, default=0.0):
     val = stock.get(key)
+    if val is None:
+        for alias in _FIELD_ALIASES.get(key, []):
+            val = stock.get(alias)
+            if val is not None:
+                break
     if val is None:
         return default
     try:
@@ -363,7 +419,10 @@ def execute_scoring_subprocess(
         raise ScoringCodeError(f"Code validation failed: {'; '.join(errors)}")
 
     # Write runner script to temp file
-    runner_code = _SUBPROCESS_RUNNER_TEMPLATE.format(scoring_code=code)
+    runner_code = _SUBPROCESS_RUNNER_TEMPLATE.format(
+        scoring_code=code,
+        aliases_json=json.dumps(_FIELD_ALIASES),
+    )
     runner_file = tempfile.NamedTemporaryFile(
         mode="w", suffix=".py", prefix="fundops_score_",
         delete=False,

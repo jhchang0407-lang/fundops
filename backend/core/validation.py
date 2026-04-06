@@ -203,11 +203,20 @@ def validate_intent(
             label_lower = rule.label.lower()
             for hint_phrase, valid_fields in _LABEL_FIELD_HINTS.items():
                 if hint_phrase in label_lower and canonical not in valid_fields:
-                    errors.append(
-                        f"{prefix}: Label mentions '{hint_phrase}' but field is '{canonical}'. "
-                        f"Expected one of: {valid_fields}. Fix the field to match the label."
-                    )
-                    has_hard_error = True
+                    # Auto-correct: if there's exactly one valid field, fix it silently
+                    if len(valid_fields) == 1:
+                        corrected = next(iter(valid_fields))
+                        rule.field = corrected
+                        errors.append(
+                            f"WARNING: {prefix}: Auto-corrected field from '{canonical}' "
+                            f"to '{corrected}' (label mentions '{hint_phrase}')."
+                        )
+                    else:
+                        errors.append(
+                            f"{prefix}: Label mentions '{hint_phrase}' but field is '{canonical}'. "
+                            f"Expected one of: {valid_fields}. Fix the field to match the label."
+                        )
+                        has_hard_error = True
                     break
 
         # --- Operator sanity: '==' is almost never correct for a floor/ceiling ---

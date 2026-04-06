@@ -188,6 +188,7 @@ RULES FOR BUILDING INTENT:
    - Example: if quality=40%, growth=25%, momentum=20% → quality rules get weight ~4.0, growth ~2.5, momentum ~2.0.
 6. Provide a human-readable "label" for each rule.
 7. logic should be "all" (weighted sum of all rules) in most cases.
+8. CRITICAL: The "field" must match the metric being tested. Do NOT use "pe" for FCF yield — use "fcf_yield". Do NOT use "debt_equity" for ROIC — use "roic". Each rule's field must be the canonical metric name that the rule actually measures.
 8. sort_by is optional — set it to the most important metric for ranking.
 9. Aim for 5-10 rules total covering the strategy's key dimensions, must-have signals, and anti-signals.
 10. Anti-signals should become rules with inverted logic (e.g. "avoid high leverage" → debt_equity < 3.0).
