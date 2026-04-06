@@ -89,7 +89,7 @@ class TestBuildFactAnchor:
         assert "ROIC" in anchor
         assert "D/E" in anchor
         assert "Price" in anchor
-        assert "IMPORTANT" in anchor
+        assert "CONTEXT" in anchor
         # Should contain actual values
         assert "83.4%" in anchor  # gross_margin 0.834 -> 83.4%
         assert "28.1%" in anchor  # roic 0.281 -> 28.1%

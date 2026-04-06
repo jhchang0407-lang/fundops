@@ -184,6 +184,7 @@ class TestIntentJsonSchema:
                 }
             ],
             "logic": "all",
+            "sort_by": {"field": "score", "direction": "desc"},
             "version": "1.0",
         }
         # Should not raise

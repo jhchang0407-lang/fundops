@@ -469,7 +469,9 @@ Respond with ONLY a JSON array:
             llm_rec = llm_analysis.get(ticker, {})
             thesis_health = llm_rec.get("thesis_health", 0)
             thesis_drift = llm_rec.get("thesis_drift", "unknown")
-            expected_return = safe_float(llm_rec.get("expected_return_current", 0))
+            llm_expected = safe_float(llm_rec.get("expected_return_current", 0))
+            # Use LLM expected return if available, otherwise keep holding's original value
+            expected_return = llm_expected if llm_expected else safe_float(h.get("expected_return", 0))
 
             # Enrich holding with LLM data for downstream use
             h["thesis_health"] = thesis_health

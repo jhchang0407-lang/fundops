@@ -327,6 +327,23 @@ def seeded_db(db, v2db, sample_constitution):
               "scorecard": {"business_quality": 9, "compounder": 8, "trap_risk": 2},
           })))
 
+    # Insert a v2 screener run so /api/thesis doesn't fall back to production DB
+    v2db.create_strategy("strat-test", "Test Strategy")
+    v2db.create_version("ver-test", "strat-test", 1, "def score(s,l): return 50")
+    screener_handoff = [
+        {"ticker": "AAPL", "symbol": "AAPL", "score": 85, "expected_return": 22.5,
+         "companyName": "Apple Inc.", "sector": "Technology"},
+        {"ticker": "MSFT", "symbol": "MSFT", "score": 78, "expected_return": 18.0,
+         "companyName": "Microsoft Corp.", "sector": "Technology"},
+    ]
+    v2db.record_screener_run(
+        run_id="run-seed",
+        strategy_version_id="ver-test",
+        universe_size=200, scored_count=200,
+        top_results=screener_handoff,
+        all_results=screener_handoff,
+    )
+
     # Insert a portfolio snapshot
     db.conn.execute("""
         INSERT INTO portfolio_snapshots (snapshot_date, total_value, cash, holdings, alerts, daily_pnl)

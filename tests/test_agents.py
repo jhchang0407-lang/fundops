@@ -144,7 +144,7 @@ async def test_allocator_no_holdings():
     agent = AllocatorAgent()
     result = await agent.run({})
     assert result.status == "complete"
-    assert result.data["message"] == "No holdings to analyze"
+    assert result.data["message"] == "No holdings or approved opportunities to analyze"
 
 
 @pytest.mark.asyncio

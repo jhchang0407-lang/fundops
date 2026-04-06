@@ -86,7 +86,7 @@ def test_get_version_history(v2db):
     v2db.create_version("v2", "s1", 2, "code2", change_reason="updated")
     history = v2db.get_version_history("s1")
     assert len(history) == 2
-    assert history[0]["version_number"] == 2  # Descending order
+    assert history[0]["version_number"] == 2  # Most recent first
 
 
 def test_get_latest_version(v2db):

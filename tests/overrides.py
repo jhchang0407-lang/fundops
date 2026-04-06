@@ -129,6 +129,22 @@ def create_test_app(
         except ImportError:
             pass
 
+    # Patch ScreenerV2DB constructor to prevent fallback to production DB.
+    # Routes do local imports like `from backend.core.db_v2 import ScreenerV2DB`
+    # then call ScreenerV2DB(db_path=...) or ScreenerV2DB() internally.
+    # We need to intercept at the source module level.
+    _original_v2db_init = ScreenerV2DB.__init__
+
+    def _patched_v2db_init(self, conn=None, db_path=None):
+        """Redirect all ScreenerV2DB construction to use the test connection."""
+        # Reuse the test v2db's connection instead of creating a new one
+        self.conn = v2db.conn
+        self._owns_conn = False
+
+    p = patch.object(ScreenerV2DB, '__init__', _patched_v2db_init)
+    _patchers.append(p)
+    p.start()
+
     from backend.api import app
     client = TestClient(app, raise_server_exceptions=False)
 
