@@ -142,6 +142,79 @@ class MemoAgent(AgentPlugin):
         parts.append("--- END STRATEGY LENS ---")
         return "\n".join(parts)
 
+    async def _extract_section_structured_data(
+        self, section_title: str, content: str, budget_so_far: float,
+    ) -> dict | None:
+        """Extract structured data from investment memo section prose.
+
+        Uses the investment extraction schema to pull key findings,
+        scores, and structured data from free-form section content.
+        Returns None if no schema matches or extraction fails.
+        """
+        if not self.llm or not content or len(content.split()) < 30:
+            return None
+
+        from backend.memo.schemas import get_investment_extraction_schema
+        schema = get_investment_extraction_schema(section_title)
+        if not schema:
+            return None
+
+        import json as _json
+
+        # Build extraction prompt
+        props = schema.get("properties", {})
+        field_descriptions = []
+        for field_name, field_def in props.items():
+            desc = field_def.get("description", "")
+            ftype = field_def.get("type", "string")
+            if ftype == "array":
+                field_descriptions.append(f'  "{field_name}": [...] // {desc}')
+            elif ftype == "object":
+                field_descriptions.append(f'  "{field_name}": {{...}} // {desc}')
+            elif ftype == "number" or ftype == "integer":
+                field_descriptions.append(f'  "{field_name}": <number> // {desc}')
+            else:
+                field_descriptions.append(f'  "{field_name}": "<string>" // {desc}')
+
+        prompt = f"""Extract structured data from this investment memo section.
+
+SECTION: {section_title}
+
+CONTENT:
+{content[:3000]}
+
+Return a JSON object with these fields:
+{{
+{chr(10).join(field_descriptions)}
+}}
+
+Extract values directly from the text. Use null for any field not mentioned.
+Return ONLY the JSON object — no markdown fences, no explanation."""
+
+        try:
+            import asyncio as _aio
+            result = await _aio.wait_for(
+                self.llm.generate(
+                    prompt=prompt,
+                    agent="memo_investment",
+                    system="You are a data extraction assistant. Return only valid JSON.",
+                    reasoning_effort="low",
+                ),
+                timeout=30.0,
+            )
+            text = (result.text or "").strip()
+            # Strip markdown fences
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0]
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0]
+            text = text.strip()
+            parsed = _json.loads(text)
+            return {"data": parsed, "cost": result.cost}
+        except Exception as e:
+            log.warning(f"Investment memo extraction failed for '{section_title}': {e}")
+            return None
+
     def _build_constitution_section_lens(self, section_title: str, strategy: dict | None) -> str:
         """Build dimension-specific directives for a particular memo section.
 
@@ -1034,14 +1107,24 @@ Market risks: {market_intel.get('opportunity_risk', 'N/A')[:1500]}
                     "unable to access", "no information available",
                 ]):
                     quality_flag = "model flagged data gap"
-                section_outputs.append({
+                section_data = {
                     "title": title,
                     "content": content,
                     "cost": result.cost,
                     "word_count": word_count,
                     **({"quality_flag": quality_flag} if quality_flag else {}),
-                })
+                }
                 total_cost += result.cost
+
+                # Extract structured data from prose (investment memo meta-schema)
+                extracted = await self._extract_section_structured_data(
+                    title, content, total_cost,
+                )
+                if extracted:
+                    section_data["structured"] = extracted["data"]
+                    total_cost += extracted.get("cost", 0)
+
+                section_outputs.append(section_data)
             except Exception as e:
                 section_outputs.append({
                     "title": title,

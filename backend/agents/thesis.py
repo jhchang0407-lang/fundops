@@ -439,10 +439,15 @@ class ThesisAgent(AgentPlugin):
     async def _write_thesis_narrative(self, ticker: str, data: dict,
                                       web_research: dict, valuation: dict,
                                       constitution: dict | None) -> str:
-        """Write thesis narrative in a single LLM call with strategy lens.
+        """Write thesis narrative using constitution-driven section schema.
 
-        Uses data constraints + strategy lens from the constitution to guide
-        emphasis, but generates all sections in one call for speed.
+        Uses the meta-schema to generate per-section structured content:
+        1. Determine which sections to include (from constitution or defaults)
+        2. For each section, build a focused prompt with relevant data + dimension lens
+        3. Generate all sections in one structured LLM call
+        4. Assemble into final narrative
+
+        Falls back to unstructured generation if meta-schema fails.
         """
         if not self.llm:
             return self._build_data_summary(ticker, data, valuation)
@@ -450,6 +455,9 @@ class ThesisAgent(AgentPlugin):
         from backend.core.thesis_schema import (
             build_thesis_data_constraints,
             build_thesis_strategy_lens,
+            get_enabled_sections,
+            get_section_data_package,
+            get_section_dimension_lens,
         )
 
         company = data.get("company_name", ticker)
@@ -463,41 +471,81 @@ class ThesisAgent(AgentPlugin):
         data_constraints = build_thesis_data_constraints(data)
         strategy_lens = build_thesis_strategy_lens(constitution)
 
-        prompt = f"""Write a concise investment thesis for {company} ({ticker}).
+        # Get constitution-customized section schema (or defaults)
+        section_schema = None
+        if constitution:
+            agent_profiles = constitution.get("agent_profiles") or {}
+            thesis_profile = agent_profiles.get("thesis") or agent_profiles.get("val") or {}
+            section_schema = thesis_profile.get("section_schema")
+        sections = get_enabled_sections(section_schema)
+
+        # Build flat metrics dict for section data packaging
+        flat_metrics = {
+            "ticker": ticker, "company_name": company, "sector": sector,
+            "industry": data.get("industry", ""),
+            "price": price, "market_cap": safe_float(data.get("market_cap", 0)),
+            "pe": safe_float(data.get("pe", 0)),
+            "fcf_yield": safe_float(data.get("fcf_yield", 0)),
+            "earnings_yield": safe_float(data.get("earnings_yield", 0)),
+            "gross_margin": safe_float(data.get("gross_margin", 0)),
+            "operating_margin": safe_float(data.get("operating_margin", 0)),
+            "net_margin": safe_float(data.get("net_margin", 0)),
+            "roic": safe_float(data.get("roic", 0)),
+            "roe": safe_float(data.get("roe", 0)),
+            "roa": safe_float(data.get("roa", 0)),
+            "fcf_margin": safe_float(data.get("fcf_margin", 0)),
+            "fcf_conversion": safe_float(data.get("fcf_conversion", 0)),
+            "debt_equity": safe_float(data.get("debt_equity", 0)),
+            "current_ratio": safe_float(data.get("current_ratio", 0)),
+            "interest_coverage": safe_float(data.get("interest_coverage", 0)),
+            "revenue_growth": safe_float(data.get("revenue_growth", 0)),
+            "earnings_growth": safe_float(data.get("earnings_growth", 0)),
+            "revenue": safe_float(data.get("revenue", 0)),
+            "net_income": safe_float(data.get("net_income", 0)),
+            "fcf": safe_float(data.get("fcf", 0)),
+            "fcf_per_share": safe_float(data.get("fcf_per_share", 0)),
+            "dividend_yield": safe_float(data.get("dividend_yield", 0)),
+            "discount_pct": discount_pct,
+            "return_sources": data.get("return_sources") or {},
+        }
+
+        # Build per-section prompts with relevant data and dimension lens
+        section_prompts = []
+        for sec in sections:
+            sec_data = get_section_data_package(sec, flat_metrics, web_research, valuation)
+            dim_lens = get_section_dimension_lens(sec, constitution)
+            title = sec.get("title", sec.get("title_default", sec["id"]))
+            purpose = sec.get("emphasis") or sec.get("purpose", "")
+
+            section_block = f"""## {title}
+Purpose: {purpose}
+
+DATA FOR THIS SECTION:
+{sec_data}
+"""
+            if dim_lens:
+                section_block += f"\n{dim_lens}\n"
+            section_prompts.append(section_block)
+
+        prompt = f"""Write a structured investment thesis for {company} ({ticker}).
 
 {data_constraints}
-
-FINANCIAL DATA (verified from SEC filings):
-- Sector: {sector}
-- Price: ${price:.2f}
-- Revenue Growth: {safe_float(data.get('revenue_growth', 0))*100:.1f}%
-- Gross Margin: {safe_float(data.get('gross_margin', 0))*100:.1f}%
-- Operating Margin: {safe_float(data.get('operating_margin', 0))*100:.1f}%
-- ROIC: {safe_float(data.get('roic', 0))*100:.1f}%
-- D/E: {safe_float(data.get('debt_equity', 0)):.2f}
-- FCF Yield: {safe_float(data.get('fcf_yield', 0))*100:.1f}%
-- PE: {safe_float(data.get('pe', 0)):.1f}
 
 VALUATION:
 - Fair Value: ${fv:.2f}
 - Method: {valuation.get('method', 'N/A')}
 - Discount to FV: {discount_pct:.1f}%
-"""
 
-        if web_research.get("why_cheap"):
-            prompt += f"\nWHY IT'S CHEAP (from web research):\n{web_research['why_cheap']}\n"
+{"".join(section_prompts)}
 
-        if web_research.get("bull_case"):
-            prompt += f"\nBULL CASE:\n{web_research['bull_case']}\n"
-
-        prompt += """
-Write 3-4 paragraphs:
-1. THE OPPORTUNITY: What does this company do and why is it interesting now?
-2. WHY IT'S CHEAP: What created the discount? Is it temporary or structural?
-3. THE THESIS: Why will this stock outperform over 3-5 years? What are the return drivers?
-4. KEY RISKS: What could go wrong? One paragraph.
-
-Be specific with numbers. No generic statements. Write like a hedge fund analyst, not a news article."""
+INSTRUCTIONS:
+Write each section as a focused paragraph (150-400 words each).
+Use the section headers provided above. For each section:
+- ONLY use data listed under that section's DATA block
+- Focus on the investor's emphasis areas if listed
+- Be specific with numbers from the data — no generic statements
+- Write like a hedge fund analyst, not a news article
+- Cite specific financial metrics to support each claim"""
 
         # Inject few-shot examples
         try:
@@ -510,7 +558,6 @@ Be specific with numbers. No generic statements. Write like a hedge fund analyst
             pass
 
         try:
-            # Load persistent memory for strategy/user context
             try:
                 from backend.api.deps import get_memory
                 memory_block = get_memory().format_for_injection()

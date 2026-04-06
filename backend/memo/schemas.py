@@ -475,6 +475,100 @@ def get_section_schema(section_num: int, sector: str = "", industry: str = "") -
     return RESEARCH_SCHEMAS.get(section_num, {})
 
 
+# ─────────────────────────────────────────────────────────────
+# Investment Memo Extraction Schemas
+# ─────────────────────────────────────────────────────────────
+# These define structured data to extract from each investment memo section.
+# Unlike research schemas (which control generation), these extract key
+# structured findings from already-generated prose.
+
+INVESTMENT_EXTRACTION_SCHEMAS: dict[str, dict] = {
+    "opportunity": {
+        "type": "object",
+        "properties": {
+            "variant_view": {"type": "string", "description": "What the market is missing, 1-2 sentences"},
+            "dislocation_type": {"type": "string", "enum": ["earnings_miss", "sector_rotation", "management_change", "macro_fear", "misunderstood_model", "other"]},
+            "key_strengths": {"type": "array", "items": {"type": "string"}, "description": "3-4 durable competitive advantages"},
+            "catalyst": {"type": "string", "description": "Primary catalyst for re-rating"},
+            "catalyst_timeline": {"type": "string", "description": "Expected timeline for catalyst (e.g. '6-12 months')"},
+        },
+        "required": ["variant_view", "key_strengths"],
+    },
+    "valuation": {
+        "type": "object",
+        "properties": {
+            "base_fair_value": {"type": "number", "description": "Base case fair value ($)"},
+            "bull_fair_value": {"type": "number", "description": "Bull case fair value ($)"},
+            "bear_fair_value": {"type": "number", "description": "Bear case fair value ($)"},
+            "base_upside_pct": {"type": "number", "description": "Base case upside (%)"},
+            "bear_downside_pct": {"type": "number", "description": "Bear case downside (%)"},
+            "primary_method": {"type": "string", "description": "Primary valuation method used"},
+            "key_assumption": {"type": "string", "description": "Most important valuation assumption"},
+        },
+        "required": ["base_fair_value", "bear_fair_value", "primary_method"],
+    },
+    "financial_quality": {
+        "type": "object",
+        "properties": {
+            "quality_score": {"type": "integer", "description": "Overall financial quality 0-100"},
+            "revenue_quality": {"type": "string", "enum": ["high", "moderate", "low"], "description": "Recurring, predictable, growing?"},
+            "margin_trend": {"type": "string", "enum": ["expanding", "stable", "contracting"]},
+            "capital_efficiency": {"type": "string", "enum": ["excellent", "good", "fair", "poor"], "description": "ROIC vs WACC"},
+            "balance_sheet": {"type": "string", "enum": ["fortress", "healthy", "adequate", "stretched", "weak"]},
+            "key_financial_concern": {"type": "string", "description": "Single biggest financial concern, or 'none'"},
+        },
+        "required": ["quality_score", "margin_trend", "capital_efficiency"],
+    },
+    "risks": {
+        "type": "object",
+        "properties": {
+            "bear_case_fair_value": {"type": "number", "description": "Bear case fair value ($)"},
+            "top_risks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "risk": {"type": "string"},
+                        "probability": {"type": "string", "enum": ["high", "medium", "low"]},
+                        "impact": {"type": "string", "enum": ["high", "medium", "low"]},
+                    },
+                },
+                "description": "Top 3-5 risks with probability and impact",
+            },
+            "thesis_breakers": {"type": "array", "items": {"type": "string"}, "description": "2-3 conditions that would invalidate the thesis"},
+        },
+        "required": ["top_risks", "thesis_breakers"],
+    },
+}
+
+# Map section titles (normalized) to extraction schema keys
+_INVESTMENT_SECTION_MAP = {
+    "opportunity": "opportunity",
+    "opportunity brief": "opportunity",
+    "valuation": "valuation",
+    "valuation analysis": "valuation",
+    "financial": "financial_quality",
+    "financial quality": "financial_quality",
+    "financial analysis": "financial_quality",
+    "risk": "risks",
+    "risks": "risks",
+    "risks & bear case": "risks",
+    "risk assessment": "risks",
+}
+
+
+def get_investment_extraction_schema(section_title: str) -> dict | None:
+    """Return the extraction schema for an investment memo section title.
+
+    Returns None if no schema matches (section will keep prose-only output).
+    """
+    normalized = section_title.lower().strip()
+    for key, schema_key in _INVESTMENT_SECTION_MAP.items():
+        if key in normalized:
+            return INVESTMENT_EXTRACTION_SCHEMAS.get(schema_key)
+    return None
+
+
 def build_json_schema_prompt(schema: dict) -> str:
     """Build the JSON schema block to embed in the LLM prompt.
 

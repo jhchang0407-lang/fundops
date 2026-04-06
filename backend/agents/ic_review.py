@@ -22,7 +22,7 @@ from backend.core.prose_validate import clean_prose
 log = logging.getLogger("fundops.ic_review")
 
 IC_REVIEW_EXTRACTION_SYSTEM = """You extract structured IC review data from an investment committee review.
-Extract the verdict (PASS or NO_PASS), conviction level (1-5), the single biggest risk, return assessments, a 2-sentence rationale, and style fit.
+Extract the verdict (PASS or NO_PASS), conviction level (1-5), the single biggest risk, return assessments, a 2-sentence rationale, style fit, and per-dimension evaluation scores.
 If the reviewer did not state a clear verdict, infer from the overall tone — lean NO_PASS when ambiguous."""
 
 IC_REVIEW_EXTRACTION_SCHEMA = {
@@ -57,6 +57,52 @@ IC_REVIEW_EXTRACTION_SCHEMA = {
             "type": "string",
             "enum": ["strong", "moderate", "weak", "none"],
             "description": "How well this fits the investment strategy"
+        },
+        "dimension_scores": {
+            "type": "object",
+            "description": "Per-dimension evaluation (0-100 score + one-line rationale)",
+            "properties": {
+                "business_quality": {
+                    "type": "object",
+                    "properties": {
+                        "score": {"type": "integer", "description": "0-100"},
+                        "rationale": {"type": "string"}
+                    }
+                },
+                "valuation": {
+                    "type": "object",
+                    "properties": {
+                        "score": {"type": "integer", "description": "0-100"},
+                        "rationale": {"type": "string"}
+                    }
+                },
+                "return_credibility": {
+                    "type": "object",
+                    "properties": {
+                        "score": {"type": "integer", "description": "0-100"},
+                        "rationale": {"type": "string"}
+                    }
+                },
+                "thesis_clarity": {
+                    "type": "object",
+                    "properties": {
+                        "score": {"type": "integer", "description": "0-100"},
+                        "rationale": {"type": "string"}
+                    }
+                },
+                "risk_awareness": {
+                    "type": "object",
+                    "properties": {
+                        "score": {"type": "integer", "description": "0-100"},
+                        "rationale": {"type": "string"}
+                    }
+                }
+            }
+        },
+        "value_trap_signals": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Specific value trap warning signs identified (empty if none)"
         }
     },
     "required": ["verdict", "conviction", "key_risk", "rationale"],
@@ -265,6 +311,10 @@ class ICReviewAgent(AgentPlugin):
             "key_risk": ai_review.get("key_risk", ""),
             "ai_review": ai_review.get("review", ""),
             "ai_verdict": ai_verdict,
+            "ai_rationale": ai_review.get("rationale", ""),
+            "style_fit": ai_review.get("style_fit", ""),
+            "dimension_scores": ai_review.get("dimension_scores", {}),
+            "value_trap_signals": ai_review.get("value_trap_signals", []),
             "constitution_scorecard": constitution_scorecard,
             "similar_research": similar_research,
             "data_freshness": data_freshness,
@@ -465,6 +515,23 @@ class ICReviewAgent(AgentPlugin):
 
         quality = thesis.get("quality", {})
 
+        # Include thesis narrative and constitution fit for deeper evaluation
+        thesis_narrative = thesis.get("thesis_narrative", "")
+        constitution_fit = thesis.get("constitution_fit", {})
+        fit_summary = ""
+        if constitution_fit.get("available"):
+            met = constitution_fit.get("signals_met", [])
+            missed = constitution_fit.get("signals_missed", [])
+            anti = constitution_fit.get("anti_signals_triggered", [])
+            fit_parts = []
+            if met:
+                fit_parts.append(f"Signals met: {', '.join(str(s) for s in met[:5])}")
+            if missed:
+                fit_parts.append(f"Signals MISSED: {', '.join(str(s) for s in missed[:5])}")
+            if anti:
+                fit_parts.append(f"Anti-signals TRIGGERED: {', '.join(str(s) for s in anti[:3])}")
+            fit_summary = "\n".join(fit_parts)
+
         prompt = f"""You are on the Investment Committee reviewing {ticker}.
 
 {strategy_lens}
@@ -482,10 +549,12 @@ Expected Return (bear): {bear_return:.0f}%
 
 QUALITY METRICS (from SEC filings):
 - Gross Margin: {quality.get('gross_margin', 0):.1f}%
+- Operating Margin: {quality.get('operating_margin', 0):.1f}%
 - ROIC: {quality.get('roic', 0):.1f}%
 - ROE: {quality.get('roe', 0):.1f}%
 - D/E: {quality.get('debt_equity', 0):.2f}
 - FCF Yield: {quality.get('fcf_yield', 0):.1f}%
+- Revenue Growth: {quality.get('revenue_growth', 0):.1f}%
 
 RETURN SOURCES:
 - Discount closing: {thesis.get('return_sources', {}).get('discount', 0):.1f}%
@@ -493,16 +562,35 @@ RETURN SOURCES:
 - Margin expansion: {thesis.get('return_sources', {}).get('margin', 0):.1f}%
 - Dividends: {thesis.get('return_sources', {}).get('dividends', 0):.1f}%
 
-Variant View: {thesis.get('variant_view', 'N/A')}
+THESIS NARRATIVE (analyst's argument):
+{thesis_narrative[:2000] if thesis_narrative else 'Not available'}
 
-YOUR JOB:
-1. Does this fit our investment strategy? (reference specific dimensions)
-2. Are the return sources credible given the SEC data, or is this a value trap?
-3. What is the single biggest risk?
-4. What conviction level (1-5) would you assign?
+CONSTITUTION FIT CHECK (mechanical):
+{fit_summary or 'No constitution available'}
+
+Variant View: {thesis.get('variant_view', '')[:500] if thesis.get('variant_view') != thesis_narrative else 'Same as narrative'}
+
+YOUR JOB — evaluate this thesis across 5 dimensions:
+
+1. **Business Quality** (0-100): Is this a quality business? Evaluate margins, ROIC, competitive position, earnings durability. Score 70+ for quality compounder, 50+ for decent business, below 50 for challenged.
+
+2. **Valuation** (0-100): Is the discount real and sustainable? Is fair value estimate reasonable? Is this cheap for the right reasons or a value trap? Score 80+ for deep unambiguous discount, 60+ for moderate discount with catalyst.
+
+3. **Return Credibility** (0-100): Are the return sources credible? Can growth, margin expansion, and discount closing actually happen? Cross-check each source against the SEC financials. Score based on how many return sources have hard data support.
+
+4. **Thesis Clarity** (0-100): Does the thesis make a clear, specific argument? Is the variant view (what the market is missing) well-articulated? Is there a clear reason this will outperform? Score based on specificity and logical coherence.
+
+5. **Risk Awareness** (0-100): Are risks specific and quantified? Does the thesis acknowledge what could go wrong, or is it blindly bullish? Score higher for specific, quantified risk scenarios.
+
+Also check for VALUE TRAP signals:
+- Cheap on P/E but declining revenue/margins
+- High ROIC but from shrinking denominator
+- "Cheap" because market correctly prices structural decline
+- Management destroying value via bad M&A or dilution
+- Sector in secular decline
 
 ## IC Verdict
-State PASS or NO_PASS with a 2-sentence rationale."""
+State PASS or NO_PASS with a 2-sentence rationale. Reference the dimension scores."""
 
         # Inject few-shot examples (Phase 3)
         try:
@@ -571,6 +659,8 @@ State PASS or NO_PASS with a 2-sentence rationale."""
                 "style_fit": style_fit,
                 "base_return_pct": extracted.get("base_return_pct"),
                 "bear_return_pct": extracted.get("bear_return_pct"),
+                "dimension_scores": extracted.get("dimension_scores", {}),
+                "value_trap_signals": extracted.get("value_trap_signals", []),
                 "cost": two_pass.total_cost,
             }
 
