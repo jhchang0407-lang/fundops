@@ -9,7 +9,7 @@ connectors:
       delay_between_batches_s: 2
   filings:
     provider: sec_edgar
-    user_agent: ${SEC_USER_AGENT}
+    user_agent: FundOps/test
   ai_model:
     provider: openai
     model: gpt-5-mini

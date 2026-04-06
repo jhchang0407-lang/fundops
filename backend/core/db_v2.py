@@ -949,24 +949,21 @@ class ScreenerV2DB:
     def create_version(self, version_id: str, strategy_id: str, version_number: int,
                        scoring_code: str, label_map: dict = None, explanation: str = None,
                        change_reason: str = None) -> dict:
-        # Let SQLite auto-generate the integer id (AUTOINCREMENT column).
-        # version_id is a codegen label (e.g. "v-437fb468"), not the row PK.
-        cursor = self.conn.execute(
+        self.conn.execute(
             """INSERT INTO strategy_versions
-               (strategy_id, version_number, scoring_code, label_map, explanation,
+               (id, strategy_id, version_number, scoring_code, label_map, explanation,
                 change_reason, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (strategy_id, version_number, scoring_code,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (version_id, strategy_id, version_number, scoring_code,
              self._json(label_map), explanation, change_reason, self._now())
         )
-        row_id = cursor.lastrowid
-        # Update the active version on the strategy (use integer row id)
+        # Update the active version on the strategy
         self.conn.execute(
             "UPDATE strategy_profiles SET active_version_id = ?, updated_at = ? WHERE id = ?",
-            (row_id, self._now(), strategy_id)
+            (version_id, self._now(), strategy_id)
         )
         self.conn.commit()
-        return self.get_version(row_id)
+        return self.get_version(version_id)
 
     def get_version(self, version_id: str) -> Optional[dict]:
         rows = self._rows_to_dicts(self.conn.execute(
