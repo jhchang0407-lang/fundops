@@ -250,7 +250,7 @@ SCREENER_PRESETS = {
     },
     "quality_compounder": {
         "label": "Quality Compounder",
-        "description": "High-quality businesses growing consistently. Thomas's style.",
+        "description": "High-quality businesses growing consistently.",
         "filters": {
             "min_market_cap": 2_000_000_000,
             "min_gross_margin": 40,
@@ -305,7 +305,7 @@ SCREENER_PRESETS = {
     },
     "sector_dislocation": {
         "label": "Sector Dislocation",
-        "description": "Cheap vs sector peers. Thomas's dislocation lens.",
+        "description": "Cheap vs sector peers. Sector dislocation lens.",
         "filters": {
             "min_market_cap": 500_000_000,
             "min_ey_vs_sector": 2,
