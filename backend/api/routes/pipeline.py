@@ -319,6 +319,8 @@ async def run_pipeline():
             portfolio_agent = PortfolioAgent(
                 config=config.resolved.get("agents", {}).get("portfolio", {}).get("config", {}),
                 fmp=get_fmp(), yfinance=get_yfinance(), db=get_db(),
+                sec=get_sec(), v2db=get_v2db(), web_search=get_web_search(),
+                llm=get_llm(),
             )
             portfolio_result = await portfolio_agent.run({"constitution": constitution})
             portfolio_data = portfolio_result.data
@@ -336,6 +338,7 @@ async def run_pipeline():
                 allocator_agent = AllocatorAgent(
                     config=config.resolved.get("agents", {}).get("allocator", {}).get("config", {}),
                     db=get_db(),
+                    llm=get_llm(),
                 )
                 allocator_result = await allocator_agent.run({
                     "holdings": portfolio_data.get("holdings", []),

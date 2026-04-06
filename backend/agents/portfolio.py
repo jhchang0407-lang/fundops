@@ -115,7 +115,7 @@ class PortfolioAgent(AgentPlugin):
     description = "Monitor held positions — P&L, thesis health, alerts"
 
     def __init__(self, config: dict = None, fmp=None, yfinance=None, db=None,
-                 web_search=None, sec=None, v2db=None):
+                 web_search=None, sec=None, v2db=None, llm=None):
         super().__init__(config)
         self.fmp = fmp
         self.yfinance = yfinance
@@ -123,6 +123,7 @@ class PortfolioAgent(AgentPlugin):
         self.web_search = web_search
         self.sec = sec
         self.v2db = v2db
+        self.llm = llm
 
     @staticmethod
     def _compute_health_score(thesis_health: list[dict]) -> int | None:
@@ -301,6 +302,146 @@ class PortfolioAgent(AgentPlugin):
         except Exception as e:
             log.warning(f"Failed to record exit for {ticker}: {e}")
 
+    async def _llm_evaluate_thesis_event(
+        self,
+        ticker: str,
+        assumption: str,
+        web_text: str,
+        financial_data: dict,
+    ) -> dict:
+        """Use LLM to evaluate whether web search results challenge a thesis assumption.
+
+        Returns structured assessment instead of keyword counting.
+        Falls back to keyword counting if LLM is unavailable.
+
+        Args:
+            ticker: Stock ticker symbol.
+            assumption: The specific thesis assumption to evaluate.
+            web_text: Raw web search result text.
+            financial_data: Known financial data for grounding.
+
+        Returns:
+            Dict with signal_direction, relevance, reasoning, specific_threat.
+        """
+        if not self.llm:
+            return self._keyword_fallback(web_text)
+
+        # Build concise financial context
+        fin_summary_parts = []
+        for key in ("revenue", "gross_margin", "operating_margin", "roic",
+                     "revenue_growth", "debt_equity", "fcf_yield", "pe"):
+            val = financial_data.get(key)
+            if val is not None:
+                if "margin" in key or "growth" in key or "yield" in key or key in ("roic",):
+                    fin_summary_parts.append(f"  {key}: {val:.1%}" if isinstance(val, float) and abs(val) < 1 else f"  {key}: {val}")
+                else:
+                    fin_summary_parts.append(f"  {key}: {val}")
+        fin_summary = "\n".join(fin_summary_parts) if fin_summary_parts else "  (no financial data available)"
+
+        prompt = f"""You are monitoring a held position in {ticker}.
+
+THESIS ASSUMPTION: "{assumption}"
+
+RECENT NEWS/RESEARCH:
+{web_text[:1500]}
+
+KNOWN FINANCIALS (from SEC filings):
+{fin_summary}
+
+TASK: Does this news SPECIFICALLY challenge, support, or have no relevance to the thesis assumption above?
+
+Important:
+- Only flag "negative" if the news DIRECTLY contradicts the specific assumption
+- Generic bad news about the sector or market does NOT count unless it specifically threatens this assumption
+- "Company declined to comment" is NOT a negative signal about the assumption
+- Be precise: cite what specifically in the news relates to the assumption
+
+Respond with ONLY this JSON:
+{{
+  "signal_direction": "negative" or "positive" or "neutral",
+  "relevance": 0.0 to 1.0,
+  "reasoning": "one sentence explaining why this news does or does not affect the assumption",
+  "specific_threat": "what specifically threatens the assumption, or null if nothing does"
+}}"""
+
+        try:
+            import asyncio as _asyncio
+            result = await _asyncio.wait_for(
+                self.llm.generate(
+                    prompt=prompt,
+                    agent="portfolio",
+                    reasoning_effort="low",
+                ),
+                timeout=30.0,
+            )
+            text = result.text if hasattr(result, "text") else str(result)
+
+            # Parse JSON from response
+            import json as _json
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0]
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0]
+            text = text.strip()
+
+            parsed = _json.loads(text)
+
+            # Validate expected fields
+            direction = parsed.get("signal_direction", "neutral")
+            if direction not in ("negative", "positive", "neutral"):
+                direction = "neutral"
+
+            relevance = float(parsed.get("relevance", 0.5))
+            relevance = max(0.0, min(1.0, relevance))
+
+            # Discard low-relevance negative signals (LLM says it's negative but barely relevant)
+            if direction == "negative" and relevance < 0.3:
+                direction = "neutral"
+
+            return {
+                "signal_direction": direction,
+                "relevance": relevance,
+                "reasoning": str(parsed.get("reasoning", ""))[:300],
+                "specific_threat": parsed.get("specific_threat"),
+                "source": "llm",
+            }
+        except Exception as e:
+            log.warning(f"LLM thesis event evaluation failed for {ticker}: {e}")
+            return self._keyword_fallback(web_text)
+
+    @staticmethod
+    def _keyword_fallback(text: str) -> dict:
+        """Fallback keyword counting when LLM is unavailable."""
+        text_lower = text.lower()
+        negative_signals = [
+            "challenged", "contradicted", "violated",
+            "deteriorated", "declined", "lost",
+            "downgraded", "missed", "fell short",
+            "abandoned", "reversed", "warning",
+        ]
+        positive_signals = [
+            "confirmed", "reaffirmed", "on track",
+            "exceeded", "improved", "maintained",
+            "consistent", "intact", "supported",
+        ]
+        neg_count = sum(1 for s in negative_signals if s in text_lower)
+        pos_count = sum(1 for s in positive_signals if s in text_lower)
+
+        if neg_count > pos_count and neg_count >= 2:
+            direction = "negative"
+        elif pos_count > neg_count:
+            direction = "positive"
+        else:
+            direction = "neutral"
+
+        return {
+            "signal_direction": direction,
+            "relevance": 0.5,
+            "reasoning": f"Keyword fallback: {neg_count} negative, {pos_count} positive signals",
+            "specific_threat": None,
+            "source": "keyword_fallback",
+        }
+
     async def _check_thesis_events(
         self,
         ticker: str,
@@ -385,29 +526,14 @@ class PortfolioAgent(AgentPlugin):
                     })
                     continue
 
-                # Determine signal direction from keyword analysis
-                text_lower = result.text.lower()
-                negative_signals = [
-                    "challenged", "contradicted", "violated",
-                    "deteriorated", "declined", "lost",
-                    "downgraded", "missed", "fell short",
-                    "abandoned", "reversed", "warning",
-                ]
-                positive_signals = [
-                    "confirmed", "reaffirmed", "on track",
-                    "exceeded", "improved", "maintained",
-                    "consistent", "intact", "supported",
-                ]
-
-                neg_count = sum(1 for s in negative_signals if s in text_lower)
-                pos_count = sum(1 for s in positive_signals if s in text_lower)
-
-                if neg_count > pos_count and neg_count >= 2:
-                    signal_direction = "negative"
-                elif pos_count > neg_count:
-                    signal_direction = "positive"
-                else:
-                    signal_direction = "neutral"
+                # Evaluate signal direction using LLM (falls back to keywords)
+                evaluation = await self._llm_evaluate_thesis_event(
+                    ticker=ticker,
+                    assumption=assumption,
+                    web_text=result.text,
+                    financial_data=financial_data,
+                )
+                signal_direction = evaluation["signal_direction"]
 
                 # Persist web signal as judgment event for corroboration tracking
                 if self.v2db and signal_direction == "negative":
@@ -421,8 +547,12 @@ class PortfolioAgent(AgentPlugin):
                                 "signal_direction": signal_direction,
                                 "finding": result.text[:500],
                                 "confidence": confidence,
+                                "reasoning": evaluation.get("reasoning", ""),
+                                "specific_threat": evaluation.get("specific_threat"),
+                                "relevance": evaluation.get("relevance", 0),
+                                "evaluation_source": evaluation.get("source", "unknown"),
                             },
-                            rationale=f"Web signal: {signal_direction} for '{assumption[:60]}'",
+                            rationale=f"Web signal: {signal_direction} for '{assumption[:60]}' — {evaluation.get('reasoning', '')[:100]}",
                         )
                     except Exception as e:
                         log.warning(f"Failed to persist web signal for {ticker}: {e}")
@@ -459,6 +589,10 @@ class PortfolioAgent(AgentPlugin):
                     "status": status,
                     "signal_direction": signal_direction,
                     "signal_count": signal_count,
+                    "reasoning": evaluation.get("reasoning", ""),
+                    "specific_threat": evaluation.get("specific_threat"),
+                    "relevance": evaluation.get("relevance", 0),
+                    "evaluation_source": evaluation.get("source", "unknown"),
                 })
 
             except Exception as e:

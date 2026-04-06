@@ -1353,6 +1353,8 @@ async def run_library_sync():
                 db=get_db(),
                 sec=get_sec(),
                 v2db=get_v2db(),
+                web_search=get_web_search(),
+                llm=get_llm(),
             )
             portfolio_result = await portfolio_agent.run(ctx)
             health_count = len([
@@ -1424,6 +1426,7 @@ async def run_portfolio():
         sec=get_sec(),
         v2db=get_v2db(),
         web_search=get_web_search(),
+        llm=get_llm(),
     )
 
     jobs = get_job_queue()
