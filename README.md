@@ -178,19 +178,15 @@ Changes persist to the constitution database immediately. Scoring code is regene
 
 ```bash
 # All backend tests
-source .venv/bin/activate
-pytest
+.venv/bin/pytest
 
 # Specific test suites
-pytest tests/contracts/                    # Data flow contracts
-pytest tests/agents/                       # Agent behavior tests
-pytest tests/scoring/                      # Scoring code generation
+.venv/bin/pytest tests/contracts/          # Data flow contracts
+.venv/bin/pytest tests/agents/             # Agent behavior tests
+.venv/bin/pytest tests/scoring/            # Scoring code generation
 
 # Frontend type checking
 cd frontend && npx tsc --noEmit
-
-# E2E tests (requires both servers running)
-cd frontend && npx playwright install chromium && npx playwright test
 ```
 
 ## API Endpoints
