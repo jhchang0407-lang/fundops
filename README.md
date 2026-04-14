@@ -38,64 +38,28 @@ The platform includes: AI Strategy Chat, Screener, Research Pipeline, Ticker Det
 
 ### Prerequisites
 
-- **Python 3.12+** (3.14 recommended)
-- **Node.js 18+**
-- **OpenAI API key** (for AI agents — uses `gpt-5-mini` by default)
+- **Python 3.12+** and **Node.js 18+**
+- **OpenAI API key** (for AI agents)
 
-Optional:
-- **FMP API key** — adds analyst estimates, earnings surprises, price targets
-- Both Yahoo Finance and SEC EDGAR are free and require no keys
-
-### Setup
+### Quick Start
 
 ```bash
-# Clone
 git clone https://github.com/jhchang0407-lang/fundops.git
 cd fundops
-
-# Environment variables
-cp .env.example .env
-# Edit .env — add your OpenAI key at minimum:
-#   OPENAI_API_KEY=sk-...
-#   FMP_API_KEY=...        (optional)
-#   SEC_USER_AGENT=FundOps/1.0 (your@email.com)
-
-# Backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-
-# Frontend
-cd frontend
-npm install
-cd ..
+npm install        # sets up everything — Python venv, backend, frontend
 ```
 
-### Run
-
+Add your API key:
 ```bash
-# Terminal 1 — Backend API
-source .venv/bin/activate
-uvicorn backend.api:app --reload --port 8000
-
-# Terminal 2 — Frontend dev server
-cd frontend
-npm run dev
+# Edit .env and set OPENAI_API_KEY=sk-...
 ```
 
-Open **http://localhost:5173** in your browser.
-
-### Production Build
-
+Run:
 ```bash
-# Build frontend
-cd frontend && npm run build && cd ..
-
-# Run (serves frontend from backend)
-uvicorn backend.api:app --port 8000
+npm start          # → http://localhost:8000
 ```
 
-Open **http://localhost:8000**.
+That's it. `npm install` handles the Python virtual environment, pip dependencies, frontend build — everything. One command to install, one command to run.
 
 ## Getting Started
 
