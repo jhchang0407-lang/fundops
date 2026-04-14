@@ -39,7 +39,6 @@ The platform includes: AI Strategy Chat, Screener, Research Pipeline, Ticker Det
 ### Prerequisites
 
 - **Python 3.12+** and **Node.js 18+**
-- **OpenAI API key** (for AI agents)
 
 ### Quick Start
 
@@ -47,27 +46,14 @@ The platform includes: AI Strategy Chat, Screener, Research Pipeline, Ticker Det
 git clone https://github.com/jhchang0407-lang/fundops.git
 cd fundops
 npm install        # sets up everything — Python venv, backend, frontend
-```
-
-Add your API key:
-```bash
-# Edit .env and set OPENAI_API_KEY=sk-...
-```
-
-Run:
-```bash
 npm start          # → http://localhost:8000
 ```
 
-That's it. `npm install` handles the Python virtual environment, pip dependencies, frontend build — everything. One command to install, one command to run.
+Open **http://localhost:8000**, go to **Settings**, and paste your OpenAI API key. That's it.
 
 ## Getting Started
 
-### 1. Add your API key
-
-Go to **Settings → AI Model** and paste your OpenAI (or compatible) API key.
-
-### 2. Define your strategy
+### 1. Define your strategy
 
 Go to **Chat** and describe your investment approach in plain English:
 
@@ -215,7 +201,7 @@ Core endpoints (all prefixed with `/api`):
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENAI_API_KEY` | Yes | OpenAI API key for AI agents |
+| `OPENAI_API_KEY` | No | OpenAI API key — can also be set in Settings UI |
 | `FMP_API_KEY` | No | Financial Modeling Prep key (premium data) |
 | `SEC_USER_AGENT` | No | SEC EDGAR user agent string (good practice) |
 

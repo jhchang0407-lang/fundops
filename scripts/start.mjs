@@ -11,24 +11,11 @@ const ROOT = join(import.meta.dirname, "..");
 
 // Check setup
 if (!existsSync(join(ROOT, ".venv"))) {
-  console.error("❌ Run `npm install` first to set up the project.");
+  console.error("Run `npm install` first to set up the project.");
   process.exit(1);
 }
 
-const envPath = join(ROOT, ".env");
-if (!existsSync(envPath)) {
-  console.error("❌ Missing .env file. Copy .env.example to .env and add your API keys.");
-  process.exit(1);
-}
-
-// Check if OPENAI_API_KEY is set
-import { readFileSync } from "fs";
-const envContent = readFileSync(envPath, "utf-8");
-if (envContent.includes("your_openai_api_key_here")) {
-  console.warn("⚠️  OPENAI_API_KEY not set in .env — AI agents won't work until you add it.");
-}
-
-console.log("\n🚀 Starting FundOps on http://localhost:8000\n");
+console.log("\nStarting FundOps on http://localhost:8000\n");
 
 const server = spawn(
   join(ROOT, ".venv", "bin", "uvicorn"),
@@ -38,7 +25,6 @@ const server = spawn(
 
 server.on("close", (code) => process.exit(code));
 
-// Handle Ctrl+C
 process.on("SIGINT", () => {
   server.kill("SIGINT");
   process.exit(0);
