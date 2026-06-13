@@ -100,8 +100,16 @@ async def _maybe_await(result):
 # --- universe scope -----------------------------------------------------------------------
 
 def universe_tickers() -> list[str]:
-    """The configured default Screened Universe (data.universe_default)."""
+    """The configured default Screened Universe (data.universe_default) — the
+    live list refreshed from index sources when present, else the bundled preset."""
     name = opconfig.load()["data"]["universe_default"]
+    try:
+        from backend.services.ingest.universe_refresh import current_universe
+        live = current_universe(name)
+        if live:
+            return [t.upper() for t in live]
+    except Exception as exc:  # noqa: BLE001 — never let the live list break ingest
+        log.debug("live universe lookup failed, using bundled preset: %s", exc)
     try:
         return [t.upper() for t in load_preset(name)]
     except (ValueError, OSError) as exc:

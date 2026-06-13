@@ -68,6 +68,7 @@ DEFAULTS: dict[str, Any] = {
     "schedules": {
         "data_sync": "daily",          # one tick: filings index + prices + affected recalcs
         "bulk_refresh": "weekly",      # full companyfacts re-extract
+        "universe_refresh": "quarterly",  # re-pull index membership + ingest new names
         "screener": "manual",
     },
     "usage": {

@@ -102,3 +102,17 @@ async def start_bootstrap():
 async def run_daily_sync():
     _spawn(ingest_sync.daily_tick(get_stores()))
     return {"started": True}
+
+
+@router.post("/sync/universe-refresh")
+async def refresh_universe_route():
+    """Refresh the live universe from index sources (S&P 500 / Russell), then
+    kick a bootstrap to ingest any newly-added names. Returns the membership diff."""
+    from backend.services.ingest import universe_refresh
+
+    stores = get_stores()
+    result = await asyncio.to_thread(universe_refresh.refresh_universe, stores)
+    if result.get("added"):  # ingest the new constituents (idempotent for the rest)
+        _spawn(ingest_sync.bootstrap(stores))
+        result["ingest_started"] = True
+    return result

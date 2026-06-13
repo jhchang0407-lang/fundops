@@ -118,7 +118,35 @@ async def tick(stores) -> dict | None:
             last = (stores.bulk.get_state("last_daily_tick") or "")[:10]
             if last < datetime.now(timezone.utc).date().isoformat():
                 out["daily_tick"] = await ingest_sync.daily_tick(stores)
+
+        # Quarterly universe refresh: re-pull index membership from free sources
+        # and ingest any newly-added constituents (bootstrap is idempotent for
+        # the rest). Gated on bootstrap_done so it never races the first sync.
+        if (cfg["schedules"].get("universe_refresh") == "quarterly"
+                and stores.bulk.get_state("bootstrap_done") == "1"
+                and _universe_refresh_due(stores)):
+            try:
+                from backend.services.ingest import universe_refresh
+                res = await asyncio.to_thread(universe_refresh.refresh_universe, stores)
+                out["universe_refresh"] = {"refreshed": res.get("refreshed"),
+                                           "added": len(res.get("added") or []),
+                                           "removed": len(res.get("removed") or [])}
+                if res.get("added"):
+                    await ingest_sync.bootstrap(stores)  # ingest the new names
+            except Exception as exc:  # never let it break the scheduler pass
+                log.warning("universe refresh failed: %s", exc)
         return out
+
+
+def _universe_refresh_due(stores, every_days: int = 85) -> bool:
+    """True if the universe has never been refreshed or it was > a quarter ago."""
+    last = stores.bulk.get_state("universe_refreshed_at")
+    if not last:
+        return True
+    try:
+        return (datetime.now(timezone.utc) - datetime.fromisoformat(last)).days >= every_days
+    except ValueError:
+        return True
 
 
 async def scheduler_loop(stores, interval_s: int = INTERVAL_S) -> None:
