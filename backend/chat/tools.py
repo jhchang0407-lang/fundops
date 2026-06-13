@@ -85,6 +85,26 @@ def _canonical_metric(metric) -> str | None:
     return m.id if m else None
 
 
+def _enriched_latest(stores, ticker: str, ent: dict | None) -> dict:
+    """Latest stored projection + read-time price/growth metrics, derived the
+    ONE shared way (workflows.evidence_packets.enriched_snapshot → domain/
+    derive.py): market_cap / pe / fcf_yield / earnings_yield are price-dependent
+    and never stored (ADR-0017), and revenue_growth needs multi-period history —
+    so chat must derive them at read time exactly as the Company snapshot, peers
+    grid and portfolio factor tilts do, or every chat metric reads as a null.
+    Fills gaps only (never overwrites a stored value). Returns {} for an unknown
+    entity or one with no retained financials."""
+    if not ent:
+        return {}
+    from backend.workflows.evidence_packets import enriched_snapshot
+
+    price = stores.portfolio.prices().get(ticker)
+    if price is None:
+        lc = stores.bulk.latest_close(ticker)
+        price = lc["close"] if lc else None
+    return enriched_snapshot(stores, ent["id"], price)
+
+
 # --- tools -------------------------------------------------------------------------
 
 def get_company_financials(stores, args: dict) -> dict:
@@ -93,7 +113,7 @@ def get_company_financials(stores, args: dict) -> dict:
         return _error(f"unknown ticker {ticker or '(missing)'} — no retained financial data")
     period_type = args.get("period_type") if args.get("period_type") in ("annual", "quarterly") else "annual"
     periods = stores.financial.periods(ent["id"], period_type)[:FINANCIAL_PERIOD_COLS]
-    latest = stores.financial.latest(ent["id"])
+    latest = _enriched_latest(stores, ticker, ent)
     if not periods and not latest:
         return _error(f"no financial observations retained for {ticker} yet")
 
@@ -139,6 +159,10 @@ def get_metric(stores, args: dict) -> dict:
     obs = stores.financial.observations(ent["id"], metric=metric, period_type=period_type, limit=limit)
     if not obs:
         latest = stores.financial.latest_value(ent["id"], metric)
+        if latest is None:
+            # market_cap / pe / fcf_yield / earnings_yield / revenue_growth are
+            # derived, never stored (ADR-0017) — derive at read time before giving up.
+            latest = _enriched_latest(stores, ticker, ent).get(metric)
         if latest is None:
             return _error(f"no retained {metric} observations for {ticker}")
         obs = [{"period_end": "latest", "value": latest}]
@@ -220,7 +244,7 @@ def compare_companies(stores, args: dict) -> dict:
         if not ent:
             missing.append(t)
             continue
-        latest = stores.financial.latest(ent["id"])
+        latest = _enriched_latest(stores, t, ent)
         raw[t] = {m: latest.get(m) for m in metrics}
         rows.append({"ticker": t, "company": ent.get("name") or t,
                      **{m: _fmt(m, latest.get(m)) for m in metrics}})
@@ -307,22 +331,34 @@ def screen_universe(stores, args: dict) -> dict:
     limit = max(1, min(int(args.get("limit") or DEFAULT_SCREEN_ROWS), MAX_SCREEN_ROWS))
 
     passed, evaluated, unevaluable = [], 0, 0
+    metric_available = {c.metric: False for c in criteria}
     for t in tickers:
         t, ent = _resolve(stores, t)
         if not ent:
             unevaluable += 1
             continue
-        latest = stores.financial.latest(ent["id"])
+        latest = _enriched_latest(stores, t, ent)
         if not latest:
             unevaluable += 1
             continue
         evaluated += 1
+        for c in criteria:
+            if latest.get(c.metric) is not None:
+                metric_available[c.metric] = True
         results = [evaluate(c, latest.get(c.metric)) for c in criteria]
         if any(r.satisfied is None for r in results):
             unevaluable += 1
             continue
         if all(r.satisfied for r in results):
             passed.append({"ticker": t, "name": ent.get("name") or t, "metrics": latest})
+    # Distinguish "screened out" from "metric not available anywhere": a
+    # criterion whose metric is null for every evaluated company makes the
+    # whole screen unevaluable, which would otherwise read as "0 passed".
+    dead_metrics = [m for m, seen in metric_available.items() if not seen]
+    if evaluated and dead_metrics:
+        notes.append("no data for "
+                     + ", ".join(labels.metric_label(m) for m in dead_metrics)
+                     + f" across any of the {evaluated} evaluated companies")
 
     passed.sort(key=lambda p: (p["metrics"].get(sort_by) is None,
                                -(p["metrics"].get(sort_by) or 0)))
@@ -590,7 +626,7 @@ def get_watchlist(stores, args: dict) -> dict:
     rows = []
     for t in wl["tickers"]:
         ent = stores.identity.resolve_ticker(t)
-        latest = stores.financial.latest(ent["id"]) if ent else {}
+        latest = _enriched_latest(stores, t, ent)
         rows.append({"ticker": t, "price": _fmt("price", prices.get(t)),
                      "momentum_3m": _fmt("momentum_3m", latest.get("momentum_3m")),
                      "pe": _fmt("pe", latest.get("pe")),

@@ -184,7 +184,10 @@ async def bootstrap(stores, progress_cb=None) -> dict:
         return await _maybe_await(fn(stores, tickers))
 
     async def s_indexes():
-        since = (datetime.now(timezone.utc).date() - timedelta(days=7)).isoformat()
+        # 30-day initial window (the sec_index MAX_BACKFILL_DAYS cap): 13D/G are
+        # rare per-name 5%-crossing events, so a 7-day window over the universe
+        # almost always surfaced zero schedules to feed sync_beneficial (#24/2.4).
+        since = (datetime.now(timezone.utc).date() - timedelta(days=30)).isoformat()
         out = await sec_index.sync_daily_indexes(stores, since)
         # Process any 13D/G schedules the recent indexes surfaced so the
         # Ownership view has largest-holder data from day one.
@@ -196,12 +199,18 @@ async def bootstrap(stores, progress_cb=None) -> dict:
         bulk.set_state("last_daily_tick", now_iso())
         return out
 
+    async def s_reconcile():
+        # Runs LAST, after companyfacts + prices, so the no-data check sees the
+        # freshly loaded data (else a fresh workspace would quarantine everything).
+        return stores.identity.reconcile_phantom_status()
+
     try:
         await _stage("universe", s_universe)
         await _stage("companyfacts", s_companyfacts)
         await _stage("prices", s_prices)
         await _stage("ownership", s_ownership)
         await _stage("indexes", s_indexes)
+        await _stage("reconcile", s_reconcile)
         if errors:
             bulk.set_state("bootstrap_stage", "failed")
         else:
@@ -429,5 +438,9 @@ async def daily_tick(stores) -> dict:
         stores.portfolio.rebuild_holdings()
     except Exception as exc:
         log.warning("holdings rebuild failed: %s", exc)
+    try:  # quarantine newly-dataless names, reactivate recovered ones
+        summary["reconcile"] = stores.identity.reconcile_phantom_status()
+    except Exception as exc:
+        log.warning("phantom-status reconcile failed: %s", exc)
     bulk.set_state("last_daily_tick", now_iso())
     return summary

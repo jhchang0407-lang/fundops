@@ -302,11 +302,13 @@ function GroupDashboard({ selection }: { selection: Selection }) {
       </div>
 
       <div className="kpi-grid" style={{ marginBottom: 12 }}>
-        {AGG_LABELS.map(([metric, label]) => {
+        {(data.aggregate_metrics ?? AGG_LABELS.map(([m]) => m))
+          .filter((metric) => data.aggregates[metric])
+          .map((metric) => {
           const agg = data.aggregates[metric];
           return (
             <div className="kpi-card" key={metric}>
-              <div className="kpi-label">{label}</div>
+              <div className="kpi-label">Median {humanizeLabel(metric)}</div>
               <div className="kpi-value num" style={{ textAlign: 'left' }}>
                 {agg?.median == null ? '—' : fmtMetric(metric, agg.median)}
               </div>
@@ -342,7 +344,7 @@ function GroupDashboard({ selection }: { selection: Selection }) {
           )}
           {data.margin_trend.length > 1 && (
             <div className="card" style={{ padding: '12px 14px' }}>
-              <div className="card-title">Median gross margin by fiscal year</div>
+              <div className="card-title">Median {data.trend_label ?? 'gross margin'} by fiscal year</div>
               <ResponsiveContainer width="100%" height={130}>
                 <LineChart data={data.margin_trend} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
                   <XAxis dataKey="year" axisLine={false} tickLine={false}

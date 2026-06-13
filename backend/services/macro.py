@@ -49,7 +49,12 @@ def _fetch_csv(series: str, start: str) -> list[dict]:
 
 
 async def sync_macro(stores) -> dict:
-    """Refresh the local macro cache. Best-effort per series."""
+    """Refresh the local macro cache. Best-effort per series, recording a
+    per-series sync error/timestamp so a permanently-failing series (DGS10/DFF
+    never caching) is distinguishable from "never attempted" rather than just
+    silently absent (#24)."""
+    from backend.core.workspace import now_iso
+
     start = (datetime.now(timezone.utc).date()
              - timedelta(days=round(HISTORY_YEARS * 365.25))).isoformat()
     stored: dict[str, int] = {}
@@ -57,10 +62,13 @@ async def sync_macro(stores) -> dict:
         try:
             points = await asyncio.wait_for(
                 asyncio.to_thread(_fetch_csv, series, start), timeout=FETCH_TIMEOUT_S + 5)
-        except Exception as exc:  # offline: strip just shows the last cache
-            log.debug("macro fetch failed for %s: %s", series, exc)
+        except Exception as exc:  # offline / persistent failure: record why
+            log.warning("macro fetch failed for %s: %s", series, exc)
+            stores.bulk.set_state(f"macro_sync_error_{series}", f"{now_iso()}: {exc}")
             continue
         stored[series] = stores.context.upsert_macro(series, points)
+        stores.bulk.set_state(f"macro_sync_error_{series}", "")
+        stores.bulk.set_state(f"macro_sync_at_{series}", now_iso())
     return {"series": stored}
 
 
@@ -88,11 +96,14 @@ def macro_strip(stores) -> list[dict]:
         else:
             latest = stores.context.macro_latest(series)
             value, as_of = (latest["value"], latest["date"]) if latest else (None, None)
+        err = stores.bulk.get_state(f"macro_sync_error_{series}")
         out.append({
             "series": series, "label": label,
             "value": value,
             "display": f"{value:.2f}%" if value is not None else "—",
             "as_of": as_of,
+            "last_sync_error": err or None,
+            "last_sync_at": stores.bulk.get_state(f"macro_sync_at_{series}") or None,
         })
     return out
 

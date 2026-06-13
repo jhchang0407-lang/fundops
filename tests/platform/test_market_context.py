@@ -96,6 +96,39 @@ def test_upcoming_events_scoped_to_holdings_and_watchlists(client, stores, seede
     assert [e["ticker"] for e in events] == ["AAA"]  # CCC not held/watched
 
 
+def test_company_events_empty_reason_in_and_out_of_scope(client, stores, seeded):
+    # AAA held -> in scope; no events retained -> awaiting-sync reason.
+    PortfolioService(stores).add_lot("AAA", 5, 90.0, "2026-01-02")
+    held = client.get("/api/company/AAA/events").json()
+    assert held["events"] == [] and "daily sync" in (held.get("empty_reason") or "")
+    # ZZZ not held/watched -> out-of-scope (add-to-watchlist) reason.
+    out = client.get("/api/company/ZZZ/events").json()
+    assert out["events"] == [] and "watchlist" in (out.get("empty_reason") or "").lower()
+
+
+def test_macro_sync_records_and_clears_last_sync_error(stores, monkeypatch):
+    import asyncio
+
+    from backend.services import macro
+
+    def boom(series, start):
+        raise RuntimeError("fred unreachable")
+
+    monkeypatch.setattr(macro, "_fetch_csv", boom)
+    asyncio.run(macro.sync_macro(stores))
+    strip = {s["series"]: s for s in macro.macro_strip(stores)}
+    assert strip["DGS10"]["value"] is None
+    assert "fred unreachable" in (strip["DGS10"]["last_sync_error"] or "")
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    monkeypatch.setattr(macro, "_fetch_csv",
+                        lambda series, start: [{"date": today, "value": 4.2}])
+    asyncio.run(macro.sync_macro(stores))
+    strip2 = {s["series"]: s for s in macro.macro_strip(stores)}
+    assert strip2["DGS10"]["last_sync_error"] is None
+    assert strip2["DGS10"]["last_sync_at"] and strip2["DGS10"]["value"] == 4.2
+
+
 # --- peers + research hub ----------------------------------------------------------
 
 def test_peers_and_industry_dashboard(client, stores):

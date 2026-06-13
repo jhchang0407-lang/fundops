@@ -1,4 +1,4 @@
-"""Canonical evidence store: sources, records, frozen bundles (ADR-0021/25/26/27)."""
+"""Canonical evidence store: sources and frozen bundles (ADR-0021/25/26/27)."""
 
 from __future__ import annotations
 
@@ -32,58 +32,6 @@ class EvidenceStore:
         row = self.ws.query_one("SELECT * FROM evidence_sources WHERE id = ?", (source_id,))
         return dict(row) if row else None
 
-    def add_record(
-        self, family: str, payload: dict, ticker: str | None = None,
-        entity_id: str | None = None, as_of: str | None = None,
-        source_id: str | None = None, quality: str | None = None,
-        run_id: str | None = None,
-    ) -> str:
-        rid = new_id("ev")
-        with self.ws.transaction() as conn:
-            conn.execute(
-                "INSERT INTO evidence_records (id, family, entity_id, ticker, as_of, captured_at, "
-                "payload, source_id, quality, created_by_run_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (rid, family, entity_id, ticker.upper() if ticker else None, as_of,
-                 now_iso(), dumps(payload), source_id, quality, run_id),
-            )
-        return rid
-
-    def get_record(self, record_id: str) -> dict | None:
-        row = self.ws.query_one("SELECT * FROM evidence_records WHERE id = ?", (record_id,))
-        if not row:
-            return None
-        d = dict(row)
-        d["payload"] = loads(d["payload"], {})
-        return d
-
-    def records_for(
-        self, ticker: str | None = None, entity_id: str | None = None,
-        family: str | None = None, limit: int = 200,
-    ) -> list[dict]:
-        clauses, params = ["superseded_by IS NULL"], []
-        if ticker:
-            clauses.append("ticker = ?")
-            params.append(ticker.upper())
-        if entity_id:
-            clauses.append("entity_id = ?")
-            params.append(entity_id)
-        if family:
-            clauses.append("family = ?")
-            params.append(family)
-        rows = self.ws.query(
-            f"SELECT * FROM evidence_records WHERE {' AND '.join(clauses)} "
-            f"ORDER BY captured_at DESC LIMIT ?",
-            (*params, limit),
-        )
-        return [{**dict(r), "payload": loads(r["payload"], {})} for r in rows]
-
-    def supersede(self, old_record_id: str, new_record_id: str) -> None:
-        with self.ws.transaction() as conn:
-            conn.execute(
-                "UPDATE evidence_records SET superseded_by = ? WHERE id = ?",
-                (new_record_id, old_record_id),
-            )
-
     def freeze_bundle(self, manifest: dict) -> str:
         """Freeze a Workflow Evidence Bundle manifest (ADR-0026): evidence ids,
         versions, constitution/universe versions, prompt versions, inclusion notes."""
@@ -102,3 +50,16 @@ class EvidenceStore:
         d = dict(row)
         d["manifest"] = loads(d["manifest"], {})
         return d
+
+    def gc_orphan_bundles(self) -> int:
+        """Delete frozen bundles no artifact references. A bundle is frozen
+        BEFORE the artifact write (thesis/ic_review/memo/screener), so a run that
+        aborts after the freeze but before the save strands it. Reclaim those on
+        the startup sweep — never mid-run, where a bundle is legitimately frozen-
+        but-not-yet-written. Returns the number of bundles removed."""
+        with self.ws.transaction() as conn:
+            cur = conn.execute(
+                "DELETE FROM evidence_bundles WHERE id NOT IN "
+                "(SELECT evidence_bundle_id FROM artifacts WHERE evidence_bundle_id IS NOT NULL)"
+            )
+            return cur.rowcount

@@ -56,7 +56,6 @@ _CLEAR_PIPELINE_STATEMENTS = (
     "DELETE FROM ic_verdicts",
     "DELETE FROM selection_events",
     "DELETE FROM workbench_state",
-    "DELETE FROM evidence_records WHERE created_by_run_id IS NOT NULL",
     "DELETE FROM evidence_bundles",
     "DELETE FROM artifacts",
     "DELETE FROM workflow_steps",
@@ -237,7 +236,6 @@ _EXPORT_SKIP_TABLES = {
 # cheap pre-download estimate so a big archive can warn before it downloads.
 _EXPORT_SIZE_COLUMNS = {
     "artifacts": ("payload", "rendered_md"),
-    "evidence_records": ("payload",),
     "evidence_sources": ("snapshot",),
     "chat_messages": ("content",),
     "execution_provenance": ("inputs_ref", "outputs_ref", "rejected_output"),

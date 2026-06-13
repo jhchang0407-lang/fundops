@@ -988,6 +988,16 @@ function OwnershipTab({ ticker }: { ticker: string }) {
 
   return (
     <div>
+      {holders.length === 0 && insiders.length > 0 && (
+        <div style={{ marginBottom: 24 }}>
+          <div className="section-label">Largest Holders — 5%+ Schedules (13D/G)</div>
+          <div className="empty-note">
+            {data?.holders_reason ||
+              'No 5%+ beneficial-owner schedules (13D/G) retained for this ticker yet — '
+              + 'these are filed only when a holder crosses 5%, and arrive as the filings index syncs.'}
+          </div>
+        </div>
+      )}
       {holders.length > 0 && (
         <div style={{ marginBottom: 24 }}>
           <div className="section-label">Largest Holders — 5%+ Schedules (13D/G)</div>
@@ -1071,7 +1081,11 @@ function OwnershipTab({ ticker }: { ticker: string }) {
       )}
       <div className="inline-metadata" style={{ marginTop: 10 }}>
         <span>read-only retained record — newest 50 transactions shown</span>
-        <span>institutional 13F holdings are planned</span>
+        <span>
+          {data?.institutions_reason ||
+            'institutional 13F holdings are not ingested — 13F INFO TABLE filings key '
+            + 'positions by CUSIP and there is no local CUSIP→ticker map'}
+        </span>
       </div>
     </div>
   );
@@ -1142,6 +1156,14 @@ export function CompanyDossier({ ticker }: { ticker: string }) {
   return (
     <div>
       <IdentityStrip identity={data.identity} />
+      {data.identity.status === 'quarantined' && (
+        <div className="empty-note" style={{ margin: '8px 0', fontSize: 'var(--text-xs)' }}>
+          ⓘ {data.identity.status_reason
+            ? `Not actively researched — ${data.identity.status_reason}.`
+            : 'Not actively researched (delisted or dataless) — shown for reference only.'}{' '}
+          It is excluded from screens, peer groups, and the Markets browser.
+        </div>
+      )}
       <div className="detail-tabs">
         {(
           [
@@ -1191,8 +1213,9 @@ function EventsTab({ ticker }: { ticker: string }) {
   if (events.length === 0) {
     return (
       <div className="stage-empty">
-        No events retained yet — filing events arrive with daily syncs; earnings and
-        dividend dates are pulled for held and watchlisted tickers.
+        {data?.empty_reason ||
+          'No events retained yet — filing events arrive with daily syncs; earnings and '
+          + 'dividend dates are pulled for held and watchlisted tickers.'}
       </div>
     );
   }
@@ -1298,8 +1321,25 @@ function PeersTab({ ticker }: { ticker: string }) {
     );
   }
   const metrics = data?.metrics ?? [];
+  // Coverage derived client-side from the present cells: a blank lattice should
+  // read as "not retained for this group", not as "computed to nothing". (The
+  // peers payload carries no backend coverage block — mirror the Company Page
+  // financials honesty using the values already in hand.)
+  const subject = peers.find((p) => p.is_subject);
+  const subjectAllNull =
+    !!subject && metrics.length > 0 && metrics.every((m) => subject[m] == null);
+  const colCoverage: Record<string, number> = {};
+  for (const m of metrics) colCoverage[m] = peers.filter((p) => p[m] != null).length;
+  const sparseCols = metrics.filter((m) => colCoverage[m] === 0);
+  const naMetrics = data?.na_metrics ?? [];  // genuinely inapplicable to this sector
   return (
     <div>
+      {subjectAllNull && (
+        <div className="empty-note" style={{ marginBottom: 10, fontSize: 'var(--text-xs)' }}>
+          ⓘ No metrics retained for {ticker} yet — its row is blank because price/financial
+          coverage hasn't synced for this name. Peers are shown for context.
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 8, marginBottom: 10, alignItems: 'center' }}>
         <button className="btn" disabled={deepDive.isPending} onClick={() => deepDive.mutate()}>
           {deepDive.isPending ? 'Writing deep-dive…' : `Deep-dive ${ticker} vs peers`}
@@ -1320,7 +1360,15 @@ function PeersTab({ ticker }: { ticker: string }) {
             <th>Ticker</th>
             <th>Company</th>
             {metrics.map((m) => (
-              <th key={m} style={{ textAlign: 'right' }}>{humanizeLabel(m)}</th>
+              <th key={m} style={{ textAlign: 'right' }}>
+                {humanizeLabel(m)}
+                {colCoverage[m] === 0 && (
+                  <span
+                    title="not retained for this peer group"
+                    style={{ color: 'var(--text-muted)', fontWeight: 400 }}
+                  > ·n/a</span>
+                )}
+              </th>
             ))}
           </tr>
         </thead>
@@ -1341,6 +1389,18 @@ function PeersTab({ ticker }: { ticker: string }) {
         </tbody>
       </table>
       </div>
+      {sparseCols.length > 0 && (
+        <div className="empty-note" style={{ padding: '6px 0 0', fontSize: 'var(--text-xs)' }}>
+          ⓘ {sparseCols.map(humanizeLabel).join(', ')} not retained for this peer group —
+          these may not apply to the sector or haven't synced.
+        </div>
+      )}
+      {naMetrics.length > 0 && (
+        <div className="empty-note" style={{ padding: '4px 0 0', fontSize: 'var(--text-xs)' }}>
+          ⓘ {naMetrics.map(humanizeLabel).join(', ')} not applicable to this sector's filers —
+          shown on roe / operating margin instead.
+        </div>
+      )}
     </div>
   );
 }

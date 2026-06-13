@@ -54,6 +54,60 @@ class IdentityStore:
             )
         return self.resolve_ticker(ticker)
 
+    # --- entity status / phantom quarantine (#4) --------------------------------
+    def set_status(self, entity_id: str, status: str, reason: str | None = None) -> None:
+        if status not in ("active", "quarantined"):
+            raise ValueError(f"unknown entity status {status!r}")
+        with self.ws.transaction() as conn:
+            conn.execute(
+                "UPDATE investment_entities SET status = ?, status_reason = ?, status_at = ? "
+                "WHERE id = ?",
+                (status, reason, now_iso(), entity_id),
+            )
+
+    def reconcile_phantom_status(self) -> dict:
+        """Quarantine entities that are BOTH priceless AND dataless (the true
+        phantoms — delisted/shell/taken-private) and reactivate any that have
+        since acquired prices or financials. Pure local SQL over already-stored
+        data; idempotent, so safe on every bootstrap/daily tick. Conservative
+        AND-logic: a name with financials-but-no-price (or vice-versa) stays
+        researchable behind its existing coverage notes."""
+        priced = ("SELECT a.entity_id FROM ticker_aliases a JOIN price_history p "
+                  "ON p.ticker = a.ticker WHERE a.valid_to IS NULL")
+        has_financials = "SELECT DISTINCT entity_id FROM latest_financials"
+        with self.ws.transaction() as conn:
+            quarantined = conn.execute(
+                f"UPDATE investment_entities SET status = 'quarantined', "
+                f"status_reason = 'no retained prices or financials', status_at = ? "
+                f"WHERE status = 'active' AND id NOT IN ({priced}) "
+                f"AND id NOT IN ({has_financials})",
+                (now_iso(),),
+            ).rowcount
+            reactivated = conn.execute(
+                f"UPDATE investment_entities SET status = 'active', "
+                f"status_reason = NULL, status_at = ? "
+                f"WHERE status = 'quarantined' "
+                f"AND (id IN ({priced}) OR id IN ({has_financials}))",
+                (now_iso(),),
+            ).rowcount
+        return {"quarantined": quarantined, "reactivated": reactivated}
+
+    def status_counts(self) -> dict:
+        """Entity counts by status, plus priced-entity reconciliation, for /sync."""
+        rows = self.ws.query(
+            "SELECT status, COUNT(*) AS n FROM investment_entities GROUP BY status")
+        by_status = {r["status"]: r["n"] for r in rows}
+        total = sum(by_status.values())
+        priced = self.ws.query_one(
+            "SELECT COUNT(DISTINCT a.entity_id) AS n FROM ticker_aliases a "
+            "JOIN price_history p ON p.ticker = a.ticker WHERE a.valid_to IS NULL")
+        return {
+            "total": total,
+            "active": by_status.get("active", 0),
+            "quarantined": by_status.get("quarantined", 0),
+            "priced": priced["n"] if priced else 0,
+        }
+
     def current_ticker(self, entity_id: str) -> str | None:
         row = self.ws.query_one(
             "SELECT ticker FROM ticker_aliases WHERE entity_id = ? AND valid_to IS NULL "
@@ -70,7 +124,7 @@ class IdentityStore:
             SELECT e.sector, e.industry, COUNT(DISTINCT a.ticker) AS n
             FROM investment_entities e
             JOIN ticker_aliases a ON a.entity_id = e.id AND a.valid_to IS NULL
-            WHERE e.sector IS NOT NULL
+            WHERE e.sector IS NOT NULL AND e.status = 'active'
             GROUP BY e.sector, e.industry
             ORDER BY e.sector, n DESC
             """
@@ -96,6 +150,7 @@ class IdentityStore:
             params.append(sector)
         if not clauses:
             return []
+        clauses.append("e.status = 'active'")
         rows = self.ws.query(
             f"""
             SELECT e.*, a.ticker FROM investment_entities e
@@ -115,17 +170,21 @@ class IdentityStore:
             """
             SELECT e.*, a.ticker FROM investment_entities e
             JOIN ticker_aliases a ON a.entity_id = e.id AND a.valid_to IS NULL
-            WHERE e.sic LIKE ? ORDER BY a.ticker LIMIT ?
+            WHERE e.sic LIKE ? AND e.status = 'active' ORDER BY a.ticker LIMIT ?
             """,
             (prefix + "%", limit),
         )
         return [dict(r) for r in rows]
 
     def all_tickers(self) -> list[str]:
-        """Every ticker with a current entity — the data-bearing set (chat
-        analyst lookups), broader than Library history (known_tickers)."""
+        """Every ticker with a current, active entity — the data-bearing set
+        (chat analyst lookups), broader than Library history (known_tickers).
+        Quarantined phantoms are excluded; resolve_ticker stays unfiltered so a
+        direct deep-link to one still renders its delisted state."""
         rows = self.ws.query(
-            "SELECT DISTINCT ticker FROM ticker_aliases WHERE valid_to IS NULL ORDER BY ticker"
+            "SELECT DISTINCT a.ticker FROM ticker_aliases a "
+            "JOIN investment_entities e ON e.id = a.entity_id "
+            "WHERE a.valid_to IS NULL AND e.status = 'active' ORDER BY a.ticker"
         )
         return [r["ticker"] for r in rows]
 

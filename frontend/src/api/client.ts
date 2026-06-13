@@ -377,6 +377,7 @@ export interface ThesisRow {
   capped?: boolean;
   summary?: string | null;
   return_components?: unknown;
+  coherence_warning?: string | null;
 }
 
 export interface ThesisCurrent {
@@ -469,6 +470,8 @@ export interface CompanyIdentity {
   latest_verdict?: string | null;
   owned?: boolean;
   entity_id?: string;
+  status?: string | null;
+  status_reason?: string | null;
 }
 
 /** One enriched milestone number — label is human text, value may be pre-formatted. */
@@ -673,8 +676,13 @@ export interface BeneficialHolder {
 export interface OwnershipResponse {
   insiders: InsiderTransaction[];
   largest_holders?: BeneficialHolder[];
-  institutions: InstitutionalHolding[];
+  institutions?: InstitutionalHolding[];
   empty_reason?: string | null;
+  // Panel-level reasons so an empty 13D/G or 13F section explains itself instead
+  // of silently vanishing (the empty_reason above fires only when ALL ownership
+  // is empty).
+  holders_reason?: string | null;
+  institutions_reason?: string | null;
 }
 
 export const getOwnership = (ticker: string) =>
@@ -693,7 +701,7 @@ export interface CompanyEvent {
 }
 
 export const getCompanyEvents = (ticker: string) =>
-  fetchJSON<{ ticker: string; events: CompanyEvent[] }>(
+  fetchJSON<{ ticker: string; events: CompanyEvent[]; empty_reason?: string | null }>(
     `/company/${encodeURIComponent(ticker)}/events`,
   );
 
@@ -705,7 +713,7 @@ export interface PeerRow {
 }
 
 export const getCompanyPeers = (ticker: string) =>
-  fetchJSON<{ ticker: string; metrics: string[]; peers: PeerRow[] }>(
+  fetchJSON<{ ticker: string; metrics: string[]; na_metrics?: string[]; peers: PeerRow[] }>(
     `/company/${encodeURIComponent(ticker)}/peers`,
   );
 
@@ -759,6 +767,10 @@ export interface MacroEntry {
   value: number | null;
   display: string;
   as_of: string | null;
+  // Distinguishes "never cached" from "last fetch failed" (populated by the
+  // macro sync; null when the series has never been attempted or last succeeded).
+  last_sync_error?: string | null;
+  last_sync_at?: string | null;
 }
 
 export const getMacro = () => fetchJSON<{ series: MacroEntry[] }>('/macro');
@@ -850,6 +862,10 @@ export interface IndustryDashboard {
   insider_buys_90d: number;
   constituents: Record<string, unknown>[];
   constituent_metrics: string[];
+  aggregate_metrics?: string[];
+  trend_metric?: string;
+  trend_label?: string;
+  na_metrics?: string[];
 }
 
 export const getIndustryDashboard = (params: { sector?: string; industry?: string }) => {
@@ -1179,6 +1195,7 @@ export interface DashboardResponse {
   portfolio_review: {
     pressure: DashboardItem[];
     opportunities: DashboardItem[];
+    stale?: boolean;
   };
   needs_attention: DashboardItem[];
   recent_activity: ActivityRow[];

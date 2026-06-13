@@ -16,7 +16,10 @@ from backend.stores import get_stores
 
 router = APIRouter()
 
-FILING_LOOKBACK_DAYS = 3
+# Held names file infrequently; a 3-day window almost always read empty even
+# though the universe-wide filings index was full (#24 — a read bug, not ingest
+# scope). 14 days matches the event horizon and surfaces recent 10-K/Q/8-K.
+FILING_LOOKBACK_DAYS = 14
 EVENT_HORIZON_DAYS = 14
 
 

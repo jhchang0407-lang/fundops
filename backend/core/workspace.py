@@ -15,9 +15,9 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 9
 
 DEFAULT_DB_DIR = Path.home() / ".fundops"
 DEFAULT_DB_PATH = DEFAULT_DB_DIR / "workspace.db"
@@ -736,12 +736,122 @@ ENTITY_SIC_DDL = """
 ALTER TABLE investment_entities ADD COLUMN sic TEXT;
 """
 
-MIGRATIONS: list[tuple[int, str, str]] = [
+# evidence_records was never wired: its EvidenceStore methods had zero callers
+# (the live record path is stores.learning), and the live evidence surface is
+# evidence_sources + evidence_bundles. Drop the dead table. FK-safe — no table
+# references evidence_records (its only FK is outbound, to evidence_sources).
+DROP_EVIDENCE_RECORDS_DDL = """
+DROP INDEX IF EXISTS idx_evidence_entity;
+DROP TABLE IF EXISTS evidence_records;
+"""
+
+# An entity with no prices AND no retained financials is a phantom (delisted /
+# shell / taken-private) — quarantine it from researchable surfaces rather than
+# present it as a live company with empty charts and all-null KPIs (#4). status
+# defaults to 'active'; SQLite backfills existing rows with the constant default.
+ENTITY_STATUS_DDL = """
+ALTER TABLE investment_entities ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+ALTER TABLE investment_entities ADD COLUMN status_reason TEXT;
+ALTER TABLE investment_entities ADD COLUMN status_at TEXT;
+"""
+
+# ADR-0015 governed AI-assisted mappings: retain unmapped XBRL tags + their
+# field labels so a governed AI mapper can propose tag→metric mappings, with the
+# candidate/decision/reason kept as data-quality evidence. Columns are nullable —
+# existing deterministically-mapped facts keep mapping_status NULL.
+RFF_AI_MAPPING_DDL = """
+ALTER TABLE reported_financial_facts ADD COLUMN field_label TEXT;
+ALTER TABLE reported_financial_facts ADD COLUMN mapping_status TEXT;
+ALTER TABLE reported_financial_facts ADD COLUMN mapping_confidence REAL;
+ALTER TABLE reported_financial_facts ADD COLUMN mapping_reason TEXT;
+ALTER TABLE reported_financial_facts ADD COLUMN mapping_version TEXT;
+"""
+
+def backfill_artifacts(conn: sqlite3.Connection) -> None:
+    """RC9 one-time backfill: re-validate and repair already-stored artifacts in
+    place. The artifact read path serves stored payload/rendered_md verbatim, so
+    generator fixes never reach historical records. Per artifact:
+
+    - scrub leaked internal metric ids from prose (rendered_md + body.rationale),
+    - add the score-based hurdle note to ic_verdicts that have neither findings
+      nor a note (the empty-list-without-explanation defect),
+    - stamp the kernel fields (kind/generated_at/...) onto legacy payloads (the
+      old thematic industry_notes that stored only {schema_version, body}).
+
+    Idempotent: only writes a row when something actually changed. Runs inside
+    the migration's transaction — must NOT open or commit its own."""
+    from backend.domain import artifact_schemas, labels
+
+    note = artifact_schemas.SCORE_ONLY_HURDLE_NOTE
+    rows = conn.execute(
+        "SELECT id, kind, ticker, entity_id, constitution_version_id, "
+        "evidence_bundle_id, created_at, rendered_md, payload FROM artifacts"
+    ).fetchall()
+    for r in rows:
+        try:
+            payload = json.loads(r["payload"]) if r["payload"] else {}
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        kind = r["kind"]
+        new_payload = dict(payload)
+        new_body = dict(payload.get("body") if isinstance(payload.get("body"), dict) else {})
+        new_rendered = r["rendered_md"]
+        changed = False
+
+        # (A) scrub leaked internal ids from prose (never for screener snapshots).
+        if kind != "screener_snapshot":
+            if new_rendered:
+                scrubbed = labels.humanize_chat_text(new_rendered)
+                if scrubbed != new_rendered:
+                    new_rendered, changed = scrubbed, True
+            if isinstance(new_body.get("rationale"), str):
+                sc = labels.humanize_chat_text(new_body["rationale"])
+                if sc != new_body["rationale"]:
+                    new_body["rationale"], changed = sc, True
+
+        # (B) ic_verdict with an empty hurdle list and no explanation gets the note.
+        if (kind == "ic_verdict" and not new_body.get("hurdle_findings")
+                and not new_body.get("hurdle_note")):
+            new_body["hurdle_note"], changed = note, True
+            if new_rendered and f"_{note}_" not in new_rendered:
+                new_rendered = new_rendered.rstrip() + f"\n\n_{note}_"
+
+        # (C) stamp kernel fields onto legacy payloads that lack them.
+        if "kind" not in new_payload:
+            new_payload["kind"], changed = kind, True
+        if "generated_at" not in new_payload:
+            new_payload["generated_at"] = new_body.get("generated_at") or r["created_at"]
+            changed = True
+        new_payload.setdefault("schema_version",
+                               artifact_schemas.SCHEMA_VERSIONS.get(kind, "1.0"))
+        for key, col in (("ticker", r["ticker"]), ("entity_id", r["entity_id"]),
+                         ("constitution_version_id", r["constitution_version_id"]),
+                         ("evidence_bundle_id", r["evidence_bundle_id"])):
+            new_payload.setdefault(key, col)
+        new_payload.setdefault("citations", [])
+        new_payload.setdefault("validation", {"ok": True, "errors": [], "warnings": []})
+
+        if changed:
+            new_payload["body"] = new_body
+            conn.execute(
+                "UPDATE artifacts SET payload = ?, rendered_md = ? WHERE id = ?",
+                (json.dumps(new_payload, ensure_ascii=False, default=str),
+                 new_rendered, r["id"]),
+            )
+
+
+MIGRATIONS: list[tuple[int, str, str | Callable]] = [
     (1, "baseline", BASELINE_DDL),
     (2, "bulk_data_layer", BULK_DATA_DDL),
     (3, "latest_projection_full_period_flows", LATEST_PROJECTION_REBUILD_DML),
     (4, "market_context_layer", MARKET_CONTEXT_DDL),
     (5, "entity_sic_code", ENTITY_SIC_DDL),
+    (6, "backfill_artifacts_rc9", backfill_artifacts),
+    (7, "drop_dead_evidence_records", DROP_EVIDENCE_RECORDS_DDL),
+    (8, "entity_status", ENTITY_STATUS_DDL),
+    (9, "rff_ai_mapping_columns", RFF_AI_MAPPING_DDL),
 ]
 
 
@@ -779,15 +889,21 @@ class Workspace:
         applied = {r["version"] for r in conn.execute("SELECT version FROM schema_migrations")}
         if 4 not in applied:
             self._repair_partial_artifacts_rebuild(conn)
-        for version, name, ddl in MIGRATIONS:
+        for version, name, step in MIGRATIONS:
             if version in applied:
                 continue
-            # executescript() autocommits per statement, so an explicit BEGIN
-            # (without COMMIT) in the script is what makes the whole migration
-            # — DDL plus its schema_migrations row — one atomic unit. A crash
-            # mid-migration rolls back cleanly instead of wedging the workspace.
+            # An explicit BEGIN (without COMMIT inside the step) makes the whole
+            # migration — schema/data change plus its schema_migrations row — one
+            # atomic unit. A crash mid-migration rolls back cleanly instead of
+            # wedging the workspace. A callable step is a Python data migration
+            # (e.g. the RC9 artifact backfill); it receives the live connection
+            # and must not open or commit its own transaction.
             try:
-                conn.executescript("BEGIN;\n" + ddl)
+                if callable(step):
+                    conn.execute("BEGIN")
+                    step(conn)
+                else:
+                    conn.executescript("BEGIN;\n" + step)
                 conn.execute(
                     "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?,?,?)",
                     (version, name, now_iso()),

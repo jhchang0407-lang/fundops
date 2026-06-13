@@ -61,6 +61,15 @@ THESIS_SCOPE_FIELDS = (
     "constitution_fit", "path_or_catalyst", "key_risk", "evidence_freshness",
 )
 
+# The honest record when an IC verdict has no hard-hurdle layer: the verdict is
+# score-based only and the artifact must say so rather than show an unexplained
+# empty findings list. Shared by the IC workflow (generation) and the RC9
+# backfill (stored records) so the two never drift.
+SCORE_ONLY_HURDLE_NOTE = (
+    "No hard hurdles are wired in this Constitution — this verdict is "
+    "score-based only (conviction, constitution fit, and data quality "
+    "against the cutoff), with no deterministic hurdle layer.")
+
 
 @dataclass
 class ValidationResult:

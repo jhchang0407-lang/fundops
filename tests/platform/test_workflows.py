@@ -26,6 +26,63 @@ def _tickers(rows):
     return [r["ticker"] for r in rows]
 
 
+# --- thesis return math (RC7) ---------------------------------------------------------
+
+
+def test_reconcile_return_clamps_dedups_and_flags():
+    """RC7 unit: _reconcile_return sanitizes the model's return math before it is
+    persisted or read by the IC gate. The stub path never exercises these
+    branches, so cover them directly."""
+    # (a) implausible headline clamped into the band; clamped value is what flows
+    exp, comps, warn = thesis._reconcile_return(790.0, {"growth": 790.0})
+    assert exp == 200.0 and warn and "clamp" in warn.lower()
+    assert abs(sum(comps.values()) - 200.0) <= 1.5  # attribution rescaled to match
+    exp, _, warn = thesis._reconcile_return(-697.0, {"valuation_gap": -697.0})
+    assert exp == -200.0 and warn
+
+    # (b) doubled valuation/re-rating component collapsed; CORRECT headline kept
+    exp, comps, warn = thesis._reconcile_return(
+        -21.6, {"valuation_gap": -21.6, "multiple_rerating": -21.6})
+    assert exp == -21.6                       # preserved, NOT corrupted to -43.2
+    assert "multiple_rerating" not in comps   # duplicate dropped
+    assert comps["valuation_gap"] == -21.6
+    assert warn and "duplicat" in warn.lower()
+
+    # (c) attribution gap flagged + rescaled, headline preserved
+    exp, comps, warn = thesis._reconcile_return(20.0, {"growth": 40.0})
+    assert exp == 20.0 and warn
+    assert abs(sum(comps.values()) - 20.0) <= 1.5
+
+    # clean profile: components already sum to the headline -> no warning, no change
+    exp, comps, warn = thesis._reconcile_return(
+        18.0, {"valuation_gap": 12.0, "growth": 6.0})
+    assert exp == 18.0 and warn is None and comps == {"valuation_gap": 12.0, "growth": 6.0}
+
+
+def test_build_payload_clamps_and_is_auditor_clean():
+    """A clamped/reconciled thesis payload surfaces coherence_warning on the body
+    AND passes the deterministic artifact auditor (no implausible-return / return-
+    math problem) — generation and CI agree."""
+    from scripts.quality_audit import audit_artifact
+    from backend.domain.artifact_schemas import THESIS_SCOPE_FIELDS
+
+    result = {
+        "summary": "Thesis summary with a 12.3% figure.",
+        "scope": {f: "Cites a 10% figure and a 2x peer rank." for f in THESIS_SCOPE_FIELDS},
+        "return_potential": {"expected_return_pct": 790.0, "components": {"growth": 790.0},
+                             "fair_value": 100.0, "valuation_method": "DCF"},
+        "evidence_notes": [],
+    }
+    payload = thesis._build_payload(
+        "AKBA", {"id": "ent_1"}, {"cv_id": None}, "bundle_1", result, 50.0, {})
+    rp = payload["body"]["return_potential"]
+    assert rp["expected_return_pct"] == 200.0           # clamped — what the IC gate reads
+    assert payload["body"].get("coherence_warning")     # surfaced on body top-level
+    problems = audit_artifact({"kind": "thesis", "payload": payload, "rendered_md": ""})
+    assert not any("implausible expected return" in p for p in problems), problems
+    assert not any(p.startswith("return math") for p in problems), problems
+
+
 # --- screener -------------------------------------------------------------------------
 
 

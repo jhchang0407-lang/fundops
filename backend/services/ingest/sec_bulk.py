@@ -340,8 +340,53 @@ def extract_company_facts(stores, entity: dict, facts_json: dict) -> dict:
                 refresh_latest=False)
             live[(m, ptype, end)] = v
             n_obs += 1
+
+    # ADR-0044/0015: retain UNMAPPED us-gaap tags (the latest period only — the
+    # governed AI mapper needs the concept + field label, not its full history)
+    # so a corpus exists for tag→metric proposals. Facts only; no observation,
+    # no decision authority until the mapper promotes one (ADR-0015).
+    n_unmapped = _retain_unmapped(stores, eid, groups.get("us-gaap") or {},
+                                  src, known_facts)
+    n_facts += n_unmapped
+
     stores.financial.refresh_latest(eid)
-    return {"facts": n_facts, "observations": n_obs}
+    return {"facts": n_facts, "observations": n_obs, "unmapped": n_unmapped}
+
+
+def _retain_unmapped(stores, eid: str, gaap: dict, src: str, known_facts: set) -> int:
+    """Retain one fact per unmapped us-gaap tag (latest period, latest filed)."""
+    n = 0
+    for tag, blob in gaap.items():
+        if tag in GAAP_TAG_METRICS or not isinstance(blob, dict):
+            continue
+        label = blob.get("label") or blob.get("description")
+        best = None  # (sort_key, entry, unit, period_type) — newest period wins
+        for unit, entries in (blob.get("units") or {}).items():
+            for e in entries or []:
+                ptype = _period_type(e)
+                if ptype is None or e.get("val") is None or not e.get("end"):
+                    continue
+                key = (str(e["end"])[:10], str(e.get("filed") or ""))
+                if best is None or key > best[0]:
+                    best = (key, e, unit, ptype)
+        if best is None:
+            continue
+        _, e, unit, ptype = best
+        end = str(e["end"])[:10]
+        fkey = (tag, ptype, end, str(e.get("accn") or ""))
+        if fkey in known_facts:
+            continue
+        try:
+            val = float(e["val"])
+        except (TypeError, ValueError):
+            continue
+        stores.financial.add_fact(
+            eid, tag, end, ptype, val, unit=unit, taxonomy="us-gaap", source_id=src,
+            accession=e.get("accn"), filed_at=e.get("filed"),
+            field_label=label, mapping_status="unmapped")
+        known_facts.add(fkey)
+        n += 1
+    return n
 
 
 def _derive(vals: dict[str, float]) -> dict[str, float]:

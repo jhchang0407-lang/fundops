@@ -188,10 +188,23 @@ function NowPanel({ data, due }: { data?: BriefingResponse; due?: number }) {
             </div>
           ))}
           <div style={{ fontFamily: 'var(--font-data)', fontSize: 'var(--text-xs)' }}>
-            {(data?.macro ?? [])
-              .filter((m) => m.value !== null)
-              .map((m) => `${m.series} ${m.display}`)
-              .join(' · ') || 'macro arrives with the daily sync'}
+            {(data?.macro ?? []).length === 0
+              ? 'macro arrives with the daily sync'
+              : (data?.macro ?? []).map((m, i) => (
+                  <span
+                    key={m.series}
+                    title={
+                      m.value != null
+                        ? `${m.label}${m.as_of ? ' · as of ' + m.as_of : ''}`
+                        : m.last_sync_error
+                          ? `${m.label} — last sync failed; showing no value`
+                          : `${m.label} not cached yet — arrives with the daily sync`
+                    }
+                    style={m.value == null ? { color: 'var(--text-muted)' } : undefined}
+                  >
+                    {i > 0 ? ' · ' : ''}{m.series} {m.display}
+                  </span>
+                ))}
           </div>
         </div>
       </div>

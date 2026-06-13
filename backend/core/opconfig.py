@@ -52,6 +52,11 @@ DEFAULTS: dict[str, Any] = {
         "holdings_price_history_years": 5,
         "cache_dir": None,             # default ~/.fundops/cache
         "ownership_ingest": True,
+        # Calendar-event scope is holdings + watchlists by default (one network
+        # call per ticker). Enable to widen to the whole configured universe so
+        # screened/research names also get earnings/dividend dates — opt-in
+        # because it makes every sync a multi-minute, many-call live pass.
+        "events_full_universe": False,
     },
     "schedules": {
         "data_sync": "daily",          # one tick: filings index + prices + affected recalcs

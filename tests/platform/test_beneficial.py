@@ -110,3 +110,27 @@ def test_ownership_endpoint_includes_largest_holders(seeded_filings):
     assert body["largest_holders"][0]["owner_name"] == "Granite Capital Partners LP"
     assert body["largest_holders"][0]["percent"] == 7.4
     assert "empty_reason" not in body
+    # Holders present -> no holders_reason; 13F is always explained, never a panel.
+    assert "holders_reason" not in body
+    assert "institutions" not in body and body["institutions_reason"]
+
+
+def test_ownership_endpoint_reasons(stores):
+    from fastapi.testclient import TestClient
+    from backend.api import create_app
+
+    stores.identity.ensure_entity("INSO", name="Insiders Only Inc")
+    stores.bulk.add_ownership(
+        "INSO", "insider_transaction", "2026-05-10", "Jane Doe",
+        owner_role="CEO", shares=1000, value=100000, txn_type="buy")
+    client = TestClient(create_app())
+    body = client.get("/api/company/INSO/ownership").json()
+    # Insiders present, no 13D/G -> explicit holders_reason, NOT the both-empty one.
+    assert body["insiders"] and "empty_reason" not in body
+    assert "13D/G" in body["holders_reason"]
+    assert body["institutions_reason"]
+
+    # Nothing at all -> both-empty reason.
+    empty = client.get("/api/company/NADA/ownership").json()
+    assert empty["insiders"] == [] and empty["largest_holders"] == []
+    assert "No ownership history" in empty["empty_reason"]

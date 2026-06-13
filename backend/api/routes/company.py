@@ -61,6 +61,11 @@ async def company_page(ticker: str):
         "latest_verdict": latest_ic["verdict"] if latest_ic else None,
         "owned": holding is not None,
         "entity_id": ent.get("id"),
+        # Phantom quarantine (#4): a delisted/dataless name is reachable by
+        # deep-link but not actively researched — surface why instead of a wall
+        # of nulls. 'active' for the overwhelming majority.
+        "status": ent.get("status") or "active",
+        "status_reason": ent.get("status_reason"),
     }
     return {"identity": identity, "lanes": _lanes(stores, ticker, screener_history)}
 
@@ -399,11 +404,15 @@ async def company_news(ticker: str):
 async def company_peers(ticker: str):
     """Deterministic peer comparison grid (same industry, fallback sector,
     nearest by market cap). Local-only read."""
-    from backend.services.research_hub import CONSTITUENT_METRICS, peers_for
+    from backend.services.research_hub import peers_for, profile_for
 
-    peers = peers_for(get_stores(), ticker.upper())
-    return {"ticker": ticker.upper(), "metrics": list(CONSTITUENT_METRICS),
-            "peers": peers}
+    stores = get_stores()
+    t = ticker.upper()
+    ent = stores.identity.resolve_ticker(t)
+    profile = profile_for([ent] if ent else [])
+    peers = peers_for(stores, t)
+    return {"ticker": t, "metrics": list(profile["constituents"]),
+            "na_metrics": list(profile["na"]), "peers": peers}
 
 
 @router.get("/company/{ticker}/events")
@@ -411,10 +420,15 @@ async def company_events(ticker: str):
     """Merged event timeline: stored calendar events (earnings/dividends),
     filing events from the retained index, insider-transaction clusters.
     Local-only read."""
-    from backend.services.ingest.events import events_view
+    from backend.services.ingest.events import events_empty_reason, events_view
 
-    return {"ticker": ticker.upper(),
-            "events": events_view(get_stores(), ticker.upper())}
+    stores = get_stores()
+    t = ticker.upper()
+    events = events_view(stores, t)
+    out = {"ticker": t, "events": events}
+    if not events:
+        out["empty_reason"] = events_empty_reason(stores, t)
+    return out
 
 
 @router.get("/company/{ticker}/ownership")
@@ -430,11 +444,25 @@ async def company_ownership(ticker: str):
                  "owner_role": r["owner_role"], "txn_type": r["txn_type"],
                  "shares": r["shares"], "value": r["value"]} for r in rows]
     holders = largest_holders(stores, ticker.upper())
-    out: dict = {"insiders": insiders, "largest_holders": holders, "institutions": []}
+    out: dict = {"insiders": insiders, "largest_holders": holders}
     if not insiders and not holders:
         out["empty_reason"] = (
             "No ownership history retained yet — insider transactions and 13D/G "
-            "holders arrive with data syncs. Institutional (13F) ingestion is "
-            "planned and requires CUSIP mapping."
+            "holders arrive with data syncs."
         )
+    elif not holders:
+        # Insiders present but no 13D/G: explain the empty panel rather than
+        # silently hiding it (it was rendering blank for KO/AAPL).
+        out["holders_reason"] = (
+            "No 5%+ beneficial-owner schedules (13D/G) retained for this ticker yet — "
+            "these are filed only when a holder crosses 5%, and arrive as the filings "
+            "index syncs."
+        )
+    # 13F decision (DROP-PANEL): institutional holdings are not ingested — 13F
+    # INFO TABLE filings key positions by CUSIP and there is no local CUSIP→ticker
+    # map. Surface the reason instead of a permanently-empty hardcoded panel.
+    out["institutions_reason"] = (
+        "Institutional (13F) holdings are not ingested — 13F INFO TABLE filings key "
+        "positions by CUSIP and there is no local CUSIP→ticker map."
+    )
     return out

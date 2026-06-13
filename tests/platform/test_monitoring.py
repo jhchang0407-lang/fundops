@@ -716,9 +716,12 @@ def test_company_prices_and_ownership_endpoints(stores):
         assert body["insiders"] == [{"as_of": "2026-05-01", "owner_name": "Jane Doe",
                                      "owner_role": "CFO", "txn_type": "buy",
                                      "shares": 1000.0, "value": 95000.0}]
-        assert body["institutions"] == [] and "empty_reason" not in body
+        # 13F panel dropped: institutions is no longer a (hardcoded-empty) key;
+        # a reason is surfaced instead. Insiders-but-no-holders -> holders_reason.
+        assert "institutions" not in body and body["institutions_reason"]
+        assert "empty_reason" not in body and body["holders_reason"]
         bare = client.get("/api/company/NOPE/ownership").json()
-        assert bare["insiders"] == [] and bare["institutions"] == []
+        assert bare["insiders"] == [] and bare["largest_holders"] == []
         assert bare["empty_reason"].startswith("No ownership history retained yet")
 
 

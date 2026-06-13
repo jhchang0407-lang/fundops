@@ -37,17 +37,44 @@ class FinancialStore:
         value: float | None, unit: str | None = None, taxonomy: str | None = None,
         source_id: str | None = None, accession: str | None = None,
         filed_at: str | None = None, mapped_concept: str | None = None,
+        field_label: str | None = None, mapping_status: str | None = None,
     ) -> str:
         fid = new_id("fact")
         with self.ws.transaction() as conn:
             conn.execute(
                 "INSERT INTO reported_financial_facts (id, entity_id, concept, taxonomy, period_end, "
-                "period_type, value, unit, source_id, accession, filed_at, mapped_concept, captured_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "period_type, value, unit, source_id, accession, filed_at, mapped_concept, "
+                "field_label, mapping_status, captured_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (fid, entity_id, concept, taxonomy, period_end, period_type, value, unit,
-                 source_id, accession, filed_at, mapped_concept, now_iso()),
+                 source_id, accession, filed_at, mapped_concept, field_label, mapping_status,
+                 now_iso()),
             )
         return fid
+
+    # --- governed AI mapping corpus (ADR-0015) -----------------------------------
+    def unmapped_facts(self, entity_id: str, limit: int = 200) -> list[dict]:
+        """Retained XBRL facts awaiting a mapping decision — the AI mapper's
+        input. Newest period first; a tag may appear once per retained period
+        (the mapper accepts a per-period observation for an accepted mapping)."""
+        rows = self.ws.query(
+            "SELECT * FROM reported_financial_facts WHERE entity_id = ? "
+            "AND mapping_status = 'unmapped' AND superseded_by IS NULL "
+            "ORDER BY period_end DESC LIMIT ?",
+            (entity_id, limit),
+        )
+        return [dict(r) for r in rows]
+
+    def set_mapping(self, fact_id: str, status: str, mapped_concept: str | None,
+                    confidence: float | None, reason: str, mapping_version: str) -> None:
+        """Record a mapping decision on an unmapped fact (ADR-0015): accepted
+        (mapped_concept set) or rejected/candidate (reason retained as evidence)."""
+        with self.ws.transaction() as conn:
+            conn.execute(
+                "UPDATE reported_financial_facts SET mapping_status = ?, mapped_concept = ?, "
+                "mapping_confidence = ?, mapping_reason = ?, mapping_version = ? WHERE id = ?",
+                (status, mapped_concept, confidence, reason, mapping_version, fact_id),
+            )
 
     # --- observations ------------------------------------------------------------
     def add_observation(

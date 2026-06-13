@@ -73,11 +73,32 @@ async def sync_company_events(stores, tickers: list[str]) -> dict:
 
 
 def event_scope(stores) -> list[str]:
-    """Holdings + watchlist tickers: the small set worth per-ticker calls."""
+    """Holdings + watchlist tickers: the small set worth per-ticker calls.
+    With data.events_full_universe enabled, widen to the configured universe so
+    screened/research names also get calendar coverage — OPT-IN, because it makes
+    sync_company_events fan out one network call per universe ticker."""
     tickers = {h["ticker"] for h in stores.portfolio.holdings()}
     for wl in stores.context.list_watchlists():
         tickers.update(wl["tickers"])
+    try:
+        from backend.core import opconfig
+        if opconfig.load()["data"].get("events_full_universe"):
+            from backend.services.ingest.sync import universe_tickers
+            tickers.update(universe_tickers())
+    except Exception as exc:  # config/universe load issues must not break the read
+        log.debug("events_full_universe scope widening skipped: %s", exc)
     return sorted(tickers)
+
+
+def events_empty_reason(stores, ticker: str) -> str:
+    """Why a ticker's Events tab is empty: in-scope names are awaiting the next
+    sync; out-of-scope names aren't tracked until watchlisted."""
+    ticker = ticker.upper()
+    if ticker in set(event_scope(stores)):
+        return (f"No events retained yet for {ticker} — calendar, filing, and insider "
+                "events arrive with the next daily sync.")
+    return ("Calendar events are tracked for holdings and watchlisted tickers; add "
+            f"{ticker} to a watchlist to begin tracking its earnings/dividend dates.")
 
 
 # --- merged read views -----------------------------------------------------------------

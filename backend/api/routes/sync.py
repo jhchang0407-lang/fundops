@@ -69,7 +69,23 @@ async def sync_status():
             "filings": _count("filings"),
             "ownership": _count("ownership_records"),
         },
+        # Reconciles the price-universe vs entities vs priced-entities denominators
+        # (#4): price_tickers = priced_entities + benchmark/alias tickers.
+        "reconciliation": _reconciliation(stores),
         "cache_size_mb": round(cache_bytes / (1024 * 1024), 1),
+    }
+
+
+def _reconciliation(stores) -> dict:
+    s = stores.identity.status_counts()
+    price_tickers = stores.bulk.price_coverage().get("tickers") or 0
+    return {
+        "entities_total": s["total"],
+        "entities_active": s["active"],
+        "entities_quarantined": s["quarantined"],
+        "priced_entities": s["priced"],
+        "price_tickers": price_tickers,
+        "benchmark_or_alias_tickers": max(0, price_tickers - s["priced"]),
     }
 
 

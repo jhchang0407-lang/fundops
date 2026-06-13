@@ -431,3 +431,59 @@ def test_action_request_never_writes_silently(client, stores):
     _send(client, "run thesis on TSLA")
     after = stores.ws.query("SELECT COUNT(*) AS n FROM workflow_runs")[0]["n"]
     assert after == before
+
+
+# --- 21. RC1: price + growth metrics are derived for chat, never stored -------------
+
+def _seed_enrichable(stores, ticker, price, shares, net_income, fcf, eps,
+                     rev_prev=1.0e10, rev_now=1.2e10):
+    """An entity with the raw inputs for derived metrics but NONE of the derived
+    metrics (market_cap/pe/fcf_yield/earnings_yield/revenue_growth) stored — the
+    real-world shape, since those are computed at read time (ADR-0017)."""
+    ent = stores.identity.ensure_entity(ticker, name=f"{ticker} Co", sector="Technology")
+    stores.financial.store_metrics_snapshot(
+        ent["id"], {"revenue": rev_prev}, "2024-12-31", "annual")
+    stores.financial.store_metrics_snapshot(
+        ent["id"], {"revenue": rev_now, "shares_outstanding": shares,
+                    "net_income": net_income, "free_cash_flow": fcf, "eps": eps},
+        "2025-12-31", "annual")
+    stores.portfolio.mark_price(ticker, price)
+    return ent
+
+
+def test_chat_derives_price_and_growth_metrics(stores):
+    ent = _seed_enrichable(stores, "ENR", 20.0, 1.0e9, 2.0e9, 1.5e9, 2.0)
+    # None of these were stored — they must be derived at read time.
+    assert stores.financial.latest_value(ent["id"], "market_cap") is None
+    assert stores.financial.latest_value(ent["id"], "pe") is None
+
+    enr = tools._enriched_latest(stores, "ENR", ent)
+    assert enr["market_cap"] == pytest.approx(2.0e10)    # 20 * 1e9 shares
+    assert enr["pe"] == pytest.approx(10.0)              # 20 / 2 eps
+    assert enr["fcf_yield"] == pytest.approx(0.075)      # 1.5e9 / 2e10
+    assert enr["earnings_yield"] == pytest.approx(0.10)  # 2e9 / 2e10
+    assert enr["revenue_growth"] == pytest.approx(0.20)  # 1.2e10 / 1.0e10 - 1
+
+    # get_metric resolves a derived metric instead of erroring "no observations".
+    out = tools.get_metric(stores, {"ticker": "ENR", "metric": "market_cap"})
+    assert out["error"] is None
+    assert out["data"]["observations"][0]["value"] == pytest.approx(2.0e10)
+
+
+def test_chat_compare_and_screen_use_derived_metrics(stores):
+    _seed_enrichable(stores, "ENR", 20.0, 1.0e9, 2.0e9, 1.5e9, 2.0)   # fcf_yield 7.5%
+    _seed_enrichable(stores, "LOW", 10.0, 1.0e9, 1.0e8, 1.0e8, 1.0,
+                     rev_prev=1.0e10, rev_now=1.0e10)                  # fcf_yield 1.0%
+
+    cmp = tools.compare_companies(
+        stores, {"tickers": ["ENR", "LOW"], "metrics": ["market_cap", "fcf_yield"]})
+    assert cmp["error"] is None
+    enr_row = next(r for r in cmp["block"]["rows"] if r["ticker"] == "ENR")
+    assert enr_row["market_cap"] == "$20.0B"   # derived, not an em-dash
+    assert enr_row["fcf_yield"] == "7.5%"
+
+    scr = tools.screen_universe(
+        stores, {"criteria": [{"metric": "fcf_yield", "operator": ">", "value": 0.05}]})
+    assert scr["error"] is None
+    assert "ENR" in scr["data"]["tickers"]
+    assert "LOW" not in scr["data"]["tickers"]

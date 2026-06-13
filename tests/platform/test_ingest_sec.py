@@ -126,12 +126,12 @@ def test_extract_company_facts(stores):
 
     # Re-extract is idempotent: no new facts, no pointless supersession.
     again = sec_bulk.extract_company_facts(stores, ent, SYN_FACTS)
-    assert again == {"facts": 0, "observations": 0}
+    assert again == {"facts": 0, "observations": 0, "unmapped": 0}
 
     # A restatement in a later refresh: latest filed wins, the prior
     # observation is superseded, derived margins recalculate.
     restated = sec_bulk.extract_company_facts(stores, ent, SYN_FACTS_RESTATED)
-    assert restated == {"facts": 1, "observations": 2}  # net_income + net_margin
+    assert restated == {"facts": 1, "observations": 2, "unmapped": 0}  # net_income + net_margin
     ni_2025 = [r for r in stores.financial.observations(eid, "net_income", period_type="annual")
                if r["period_end"] == "2025-12-31"]
     assert [r["value"] for r in ni_2025] == [150.0]
@@ -325,7 +325,7 @@ def test_bootstrap_stage_progression(stores, monkeypatch):
     out = _run(ingest_sync.bootstrap(stores))
     assert out["ok"] is True and out["errors"] == []
     assert stages == ["universe", "companyfacts", "prices", "ownership",
-                      "indexes", "done"]
+                      "indexes", "reconcile", "done"]
     assert calls["cik"] == calls["facts"] == ["SYNX", "ZZZZ"]
     # 5y universe bars (data.price_history_years) feed momentum/volatility.
     assert calls["prices"] == [(["SYNX", "ZZZZ"], {"years": 5})]

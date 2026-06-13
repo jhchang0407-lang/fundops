@@ -350,6 +350,7 @@ export default function Dashboard() {
   const needsDecision = data?.needs_decision ?? [];
   const pressure = data?.portfolio_review?.pressure ?? [];
   const opportunities = data?.portfolio_review?.opportunities ?? [];
+  const reviewStale = data?.portfolio_review?.stale ?? false;
   const needsAttention = data?.needs_attention ?? [];
   const activity = data?.recent_activity ?? [];
 
@@ -470,7 +471,17 @@ export default function Dashboard() {
 
       {/* ── Portfolio review ── */}
       <div className="dash-section">
-        <div className="section-label">Portfolio review</div>
+        <div className="section-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>Portfolio review</span>
+          {reviewStale && (
+            <span
+              className="health-chip watching"
+              title="Live concentration or the reviewed set has drifted since this review was last projected. Use Refresh to reproject."
+            >
+              drifted since last projection
+            </span>
+          )}
+        </div>
         <div className="two-col">
           <div className="card">
             <div className="card-title">Positions under pressure</div>

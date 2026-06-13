@@ -236,15 +236,14 @@ async def _review_one(stores, ticker: str, item: dict, ctx: dict) -> dict:
     # Raw metric ids must never reach the user-facing record (same safety net
     # as chat replies — the model sees ids in the evidence and echoes them).
     rationale = labels.humanize_chat_text(rationale)
-    # Honest record when the Constitution wires no hard hurdles: the verdict
-    # is score-based only, and the artifact must say so rather than show an
-    # unexplained empty findings list.
+    # Honest record when the verdict has no hard-hurdle layer: it is score-based
+    # only, and the artifact must say so rather than show an unexplained empty
+    # findings list. Keyed on the persisted findings (covers both "no hurdles
+    # wired" and any future "wired but merged to []"), so the empty-list-without-
+    # explanation defect (RC9) can never recur at generation.
     hurdle_note = None
-    if not ctx["hurdles"]:
-        hurdle_note = (
-            "No hard hurdles are wired in this Constitution — this verdict is "
-            "score-based only (conviction, constitution fit, and data quality "
-            "against the cutoff), with no deterministic hurdle layer.")
+    if not findings:
+        hurdle_note = artifact_schemas.SCORE_ONLY_HURDLE_NOTE
 
     bundle_id = stores.evidence.freeze_bundle({
         "kind": "ic_review",

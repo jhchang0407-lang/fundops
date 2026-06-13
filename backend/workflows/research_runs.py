@@ -114,6 +114,24 @@ def _source_line(i: int, s: dict, what: str) -> str:
     return f"[{i}] {s.get('form') or 'filing'} filed {str(s.get('filed_at'))[:10]} — {what}"
 
 
+_CITATION = re.compile(r"\[(W?\d+)\]")
+
+
+def _validate_citations(body_md: str | None, sources: list) -> tuple[str, list[str]]:
+    """Drop dangling [n]/[Wn] citation markers — ones the model emitted that
+    point at a source it was never given (a marker pointing at nothing is worse
+    than no marker). Each declared source string carries its own [n] prefix.
+    Returns (clean_body, dangling_markers)."""
+    body_md = body_md or ""
+    cited = set(_CITATION.findall(body_md))
+    declared = {m.group(1) for s in sources for m in [_CITATION.search(str(s))] if m}
+    dangling = sorted(c for c in cited if c not in declared)
+    clean = body_md
+    for marker in sorted(dangling, key=len, reverse=True):  # longest first: [11] before [1]
+        clean = clean.replace(f"[{marker}]", "")
+    return clean, dangling
+
+
 async def run_company_note(stores, ticker: str, kind: str) -> dict:
     """risk_diff | mdna_note for one ticker -> filing_note artifact."""
     ticker = ticker.upper()
@@ -217,11 +235,11 @@ async def run(stores, kind: str, tickers: list[str], group_label: str,
     scope_note = (f"Scope: the {len(tickers)} largest of {group_total} constituents "
                   f"by market cap." if truncated else None)
 
+    # Sector-aware metric set (a bank note must not print gross_margin=None lines).
+    note_metrics = [m for m in dashboard["constituent_metrics"] if m != "avg_dollar_volume_3m"]
     metric_lines = []
     for c in dashboard["constituents"]:
-        bits = [f"{m}={c.get(m)}" for m in ("market_cap", "roic", "gross_margin",
-                                            "revenue_growth", "momentum_6m")
-                if c.get(m) is not None]
+        bits = [f"{m}={c.get(m)}" for m in note_metrics if c.get(m) is not None]
         metric_lines.append(f"{c['ticker']} ({c['name']}): " + (", ".join(bits) or "no data"))
 
     sources, excerpts = [], []
@@ -292,7 +310,7 @@ async def run(stores, kind: str, tickers: list[str], group_label: str,
                  "sources": sources,
                  "aggregates": dashboard["aggregates"]},
     }
-    rendered = result["body_md"]
+    rendered, _dangling = _validate_citations(result["body_md"], sources)
     if scope_note and scope_note not in rendered:
         rendered = f"{scope_note}\n\n{rendered}"
     artifact_id = stores.artifacts.save_artifact(
@@ -508,7 +526,7 @@ async def run_thematic(stores, query: str, limit: int = THEME_COMPANY_CAP) -> di
     )
     if not isinstance(result, dict) or not result.get("body_md"):
         result = stub_report
-    rendered = result["body_md"]
+    rendered, _dangling = _validate_citations(result["body_md"], all_sources + web_sources)
     if coverage not in rendered:
         rendered = f"{coverage}\n\n{rendered}"
     payload = {

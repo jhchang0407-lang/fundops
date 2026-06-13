@@ -19,11 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 
 from backend.core import web_research
 from backend.core.ai import PROMPT_VERSION, get_ai
 from backend.core.workspace import now_iso
-from backend.domain import artifact_schemas
+from backend.domain import artifact_schemas, prose_quality
 from backend.workflows import evidence_packets as ep
 from backend.workflows import stage
 
@@ -35,6 +36,10 @@ DEFAULT_SELECTION_COUNT = 10
 DEFAULT_RETURN_CAP_THRESHOLD = 5.0
 GENERATION_CONCURRENCY = 3
 MAX_ATTEMPTS = 3
+
+# An expected return beyond this band is implausible (the auditor flags |x|>300%);
+# clamp at generation so a garbage 790% can never be persisted OR feed the IC gate.
+RETURN_CLAMP_PCT = 200.0
 
 SYSTEM = (
     "You are the FundOps thesis analyst writing for an institutional investment "
@@ -224,6 +229,7 @@ async def _generate_one(stores, ticker: str, ctx: dict) -> dict:
     last_error: str | None = None
     validation_errors: list[str] = []
     validation_failures = 0
+    density_retried = False
     for attempt in range(1, MAX_ATTEMPTS + 1):
         if attempt > 1:
             stores.runs.retry_step(step_id)
@@ -243,6 +249,19 @@ async def _generate_one(stores, ticker: str, ctx: dict) -> dict:
             payload["body"]["web_sources"] = web_sources
         vr = artifact_schemas.validate_thesis(payload)
         if vr.ok:
+            # Soft figure-density gate: a scope answer that reads as generic
+            # filler (few numbers) gets ONE targeted regeneration — model-path
+            # only (the stub is a deterministic placeholder) and never a
+            # rejection. Keeps the denser of original/regenerated per field.
+            if not density_retried and get_ai().provider != "stub":
+                low = [f for f, ans in payload["body"]["scope"].items()
+                       if f != "evidence_freshness" and ans
+                       and prose_quality.figure_density(ans) < prose_quality.THESIS_DENSITY_FLOOR]
+                if low:
+                    density_retried = True
+                    payload = await _densify_scope(
+                        stores, ticker, ent, ctx, bundle_id, base_user, stub,
+                        price, anchors, web_sources, low, run_id, payload)
             payload["validation"] = vr.to_dict()
             aid = stores.artifacts.save_artifact(
                 "thesis", payload, ticker=ticker, entity_id=ent["id"], run_id=run_id,
@@ -266,6 +285,7 @@ async def _generate_one(stores, ticker: str, ctx: dict) -> dict:
                 "fair_value": rp.get("fair_value"), "expected_return_pct": expected,
                 "capped": capped, "summary": payload["body"].get("summary"),
                 "return_components": rp.get("components") or {},
+                "coherence_warning": payload["body"].get("coherence_warning"),
             }
         validation_failures += 1
         last_error = "validation failed: " + "; ".join(vr.errors)
@@ -292,6 +312,10 @@ def _build_payload(ticker: str, ent: dict, ctx: dict, bundle_id: str, result: di
         if k in artifact_schemas.THESIS_RETURN_COMPONENTS and _num(v) is not None
     }
     expected = _num(rp_in.get("expected_return_pct"))
+    # RC7: sanitize the model's return math BEFORE it is persisted or read by the
+    # IC gate — clamp implausible headlines, de-duplicate doubled components,
+    # flag attribution gaps. The clamped/reconciled values are what flow on.
+    expected, components, coherence_warning = _reconcile_return(expected, components)
     # fair_value/valuation_method/price are ALWAYS populated (deterministic
     # fallback chain: model -> anchors -> expected-return applied to price) so
     # readers never render empty valuation fields.
@@ -319,7 +343,38 @@ def _build_payload(ticker: str, ent: dict, ctx: dict, bundle_id: str, result: di
         "price": price,
         "return_potential": rp,
         "evidence_notes": [str(n) for n in result.get("evidence_notes") or []],
+        # Body top-level so BOTH the Artifact Reader (pickStr pools body) and the
+        # Thesis stage row surface the ReturnProfile coherence flag.
+        **({"coherence_warning": coherence_warning} if coherence_warning else {}),
     }}
+
+
+async def _densify_scope(stores, ticker, ent, ctx, bundle_id, base_user, stub,
+                         price, anchors, web_sources, low, run_id, payload):
+    """One targeted regeneration of low-figure-density scope answers. Soft: on
+    any failure (model error / invalid output) the original payload is kept, and
+    each field only changes if the rewrite is at least as dense."""
+    fix_user = base_user + (
+        "\n\nThese scope answers read as generic filler — fewer than a third of "
+        "their sentences cite a number: " + ", ".join(low) + ". Rewrite ONLY these "
+        "answers, restating each claim with the specific figures (levels, trends, "
+        "peer ranks) from the evidence packet above. Keep all other fields identical.")
+    try:
+        regen = await get_ai().complete_json(
+            CAPABILITY, SYSTEM, fix_user, SHAPE, tier="deep", run_id=run_id, stub=stub)
+    except Exception:  # noqa: BLE001 — soft gate, keep the original
+        return payload
+    re_payload = _build_payload(ticker, ent, ctx, bundle_id, regen, price, anchors)
+    if web_sources:
+        re_payload["body"]["web_sources"] = web_sources
+    if not artifact_schemas.validate_thesis(re_payload).ok:
+        return payload
+    for f in low:
+        new_ans = (re_payload["body"].get("scope") or {}).get(f, "")
+        old_ans = payload["body"]["scope"].get(f, "")
+        if new_ans and prose_quality.figure_density(new_ans) >= prose_quality.figure_density(old_ans):
+            payload["body"]["scope"][f] = new_ans
+    return payload
 
 
 def _num(v) -> float | None:
@@ -327,6 +382,64 @@ def _num(v) -> float | None:
         return None if v is None or isinstance(v, bool) else float(v)
     except (TypeError, ValueError):
         return None
+
+
+def _reconcile_tol(expected: float) -> float:
+    """Auditor tolerance (scripts/quality_audit.py): the return components may
+    differ from the headline by at most max(1.5 points, 5%). Kept numerically
+    identical so a thesis that passes generation also passes the CI audit."""
+    return max(1.5, abs(expected) * 0.05)
+
+
+def _reconcile_return(expected, components):
+    """Sanitize a model-supplied return profile at generation (RC7) so an
+    implausible or internally-inconsistent number can never be persisted or feed
+    the IC gate. Returns (expected, components, coherence_warning|None):
+
+    1. DEDUP a duplicated valuation/re-rating component — the FICO/NVEC case
+       where valuation_gap and multiple_rerating both carry the SAME figure, so
+       the components sum to ~2x the (correct) headline. Drop the duplicate; the
+       headline is right and must be preserved.
+    2. CLAMP an implausible headline (|x| > RETURN_CLAMP_PCT) into the band; the
+       clamped value is what persists and flows downstream to the IC gate.
+    3. RECONCILE the components to the (preserved or clamped) headline when they
+       no longer sum to it within tolerance — by RESCALING the attribution, never
+       by overwriting the headline (the headline is the IC-gate value and, in the
+       dedup case, the correct one). Flag whenever any of the above fired.
+
+    Components are returned rounded for storage."""
+    comps = {k: float(v) for k, v in components.items() if isinstance(v, (int, float))}
+    warning = None
+
+    # 1. dedup an exact-duplicate valuation/re-rating component
+    vg, mr = comps.get("valuation_gap"), comps.get("multiple_rerating")
+    if vg is not None and mr is not None and abs(vg - mr) <= 1e-6 and abs(vg) > 1e-6:
+        comps.pop("multiple_rerating")
+        warning = ("collapsed a duplicated valuation / multiple-rerating component "
+                   "(both carried the same figure)")
+
+    if isinstance(expected, (int, float)):
+        # 2. clamp an implausible headline into the band
+        if abs(expected) > RETURN_CLAMP_PCT:
+            clamped = math.copysign(RETURN_CLAMP_PCT, expected)
+            warning = (f"implausible expected return ({expected:.0f}%) clamped to "
+                       f"{clamped:+.0f}% — treat the return profile as unverified")
+            expected = clamped
+        # 3. reconcile the attribution to the headline (rescale, never overwrite)
+        total = sum(comps.values())
+        if comps and abs(total - expected) > _reconcile_tol(expected):
+            if abs(total) > 1e-9:
+                factor = expected / total
+                comps = {k: round(v * factor, 2) for k, v in comps.items()}
+                warning = warning or (
+                    f"return components summed to {total:.1f}% vs the stated "
+                    f"{expected:.1f}% — attribution rescaled to reconcile")
+            else:
+                warning = warning or (
+                    f"return components sum to 0% vs the stated {expected:.1f}% — "
+                    "attribution is missing")
+    comps = {k: round(v, 2) for k, v in comps.items()}
+    return expected, comps, warning
 
 
 def _stub_thesis(packet: dict, anchors: dict) -> dict:

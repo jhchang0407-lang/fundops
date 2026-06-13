@@ -32,6 +32,17 @@ class RunStore:
                 "UPDATE workflow_runs SET status = ?, stats = ?, error = ?, finished_at = ? WHERE id = ?",
                 (status, dumps(stats), error, now_iso(), run_id),
             )
+            # No finalized run may keep a dangling non-terminal step. In the happy
+            # path every step is already finished (this matches 0 rows); it closes
+            # steps left behind when a run is finalized while one is still in flight.
+            if status in ("completed", "failed", "cancelled"):
+                conn.execute(
+                    "UPDATE workflow_steps SET status = 'failed', "
+                    "error = COALESCE(error, 'run finalized while step non-terminal'), "
+                    "finished_at = ? "
+                    "WHERE run_id = ? AND status IN ('pending','running','retrying')",
+                    (now_iso(), run_id),
+                )
 
     def get_run(self, run_id: str) -> dict | None:
         row = self.ws.query_one("SELECT * FROM workflow_runs WHERE id = ?", (run_id,))
@@ -74,14 +85,27 @@ class RunStore:
         return row["id"] if row else None
 
     def reconcile_orphans(self) -> int:
-        """Fail any run left 'running' by a previous server session: the process
-        owning its coroutine is gone, so it will never finish. Called on startup
-        so stale runs don't show as forever-running or block new ones."""
+        """Fail any run left 'running' by a previous server session (the process
+        owning its coroutine is gone, so it will never finish) AND cascade-close
+        its still-non-terminal steps. Called on startup so stale runs/steps don't
+        show as forever-running or block new ones — without the step cascade the
+        Runs live-stage-map shows perpetual in-progress on an already-dead run.
+        (Steps go to 'failed', not 'cancelled': that is the only terminal status
+        the workflow_steps CHECK allows and it matches the run-level sweep.)"""
         with self.ws.transaction() as conn:
             cur = conn.execute(
                 "UPDATE workflow_runs SET status = 'failed', "
                 "error = 'interrupted — server restarted while running', finished_at = ? "
                 "WHERE status = 'running' AND server_session_id != ?",
+                (now_iso(), self.ws.server_session_id),
+            )
+            conn.execute(
+                "UPDATE workflow_steps SET status = 'failed', "
+                "error = COALESCE(error, 'interrupted — server restarted while running'), "
+                "finished_at = ? "
+                "WHERE status IN ('pending','running','retrying') AND run_id IN "
+                "(SELECT id FROM workflow_runs WHERE status != 'running' "
+                " AND server_session_id != ?)",
                 (now_iso(), self.ws.server_session_id),
             )
             return cur.rowcount

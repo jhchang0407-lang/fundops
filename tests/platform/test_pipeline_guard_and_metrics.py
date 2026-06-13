@@ -110,6 +110,60 @@ def test_reconcile_orphans_fails_prior_session_runs(stores):
     assert stores.runs.get_run(live)["status"] == "running"
 
 
+def test_reconcile_orphans_cascades_non_terminal_steps(stores):
+    """A swept run must not leave its steps perpetually 'running' (the Runs
+    live-stage-map reads step status)."""
+    rid = stores.runs.start_run("thesis", "user")
+    sid = stores.runs.add_step(rid, "thesis", "XYZ")  # defaults to 'running'
+    with stores.ws.transaction() as conn:
+        conn.execute("UPDATE workflow_runs SET server_session_id = 'prior' WHERE id = ?", (rid,))
+    stores.runs.reconcile_orphans()
+    step = stores.runs.steps_for(rid)[0]
+    assert step["status"] == "failed"
+    assert "interrupted" in (step["error"] or "")
+
+
+def test_finish_run_closes_dangling_steps(stores):
+    rid = stores.runs.start_run("thesis", "user")
+    stores.runs.add_step(rid, "thesis", "XYZ")  # left non-terminal
+    stores.runs.finish_run(rid, "failed", error="boom")
+    step = stores.runs.steps_for(rid)[0]
+    assert step["status"] == "failed"
+    # A step that finished normally before the run is left untouched.
+    rid2 = stores.runs.start_run("thesis", "user")
+    sid2 = stores.runs.add_step(rid2, "thesis", "AAA")
+    stores.runs.finish_step(sid2, "completed", detail={"ok": True})
+    stores.runs.finish_run(rid2, "completed")
+    assert stores.runs.steps_for(rid2)[0]["status"] == "completed"
+
+
+def test_gc_orphan_bundles(stores):
+    # A frozen bundle no artifact references is reclaimed; a referenced one survives.
+    orphan = stores.evidence.freeze_bundle({"kind": "thesis", "ticker": "ORP"})
+    kept = stores.evidence.freeze_bundle({"kind": "thesis", "ticker": "KEP"})
+    stores.artifacts.save_artifact(
+        "thesis", {"kind": "thesis", "schema_version": "1.0", "generated_at": "2026-01-01",
+                   "body": {"summary": "x"}},
+        ticker="KEP", evidence_bundle_id=kept)
+    removed = stores.evidence.gc_orphan_bundles()
+    assert removed == 1
+    assert stores.evidence.get_bundle(orphan) is None
+    assert stores.evidence.get_bundle(kept) is not None
+
+
+def test_dead_evidence_records_table_dropped(stores):
+    row = stores.ws.query_one(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='evidence_records'")
+    assert row is None
+
+
+def test_clear_pipeline_survives_dropped_table(client):
+    # /clear-pipeline used to DELETE FROM evidence_records; after the drop that
+    # statement was removed in lockstep, so the endpoint must still succeed.
+    resp = client.post("/api/settings/clear-pipeline")
+    assert resp.status_code == 200, resp.text
+
+
 # --- route guards (no stacked duplicates) ------------------------------------------
 
 def test_route_blocks_duplicate_thesis(client, stores):

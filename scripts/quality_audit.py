@@ -17,6 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend.core.workspace import Workspace, set_workspace  # noqa: E402
 from backend.domain import artifact_schemas  # noqa: E402
+from backend.domain.prose_quality import figure_density as _figure_density  # noqa: E402
+from backend.domain.prose_quality import sentences as _sentences  # noqa: E402
 from backend.stores import Stores  # noqa: E402
 
 # Raw internal ids that must never reach user-facing prose.
@@ -24,21 +26,7 @@ LEAK_TOKENS = re.compile(
     r"\b(fcf_yield|revenue_growth|gross_margin|operating_margin|net_margin|"
     r"debt_equity|shares_outstanding|market_cap|ic_review|thesis_intake|"
     r"workbench|run_id|entity_id|metric_key|stage_output)\b")
-NUMBERY = re.compile(r"\d")
 CITATION = re.compile(r"\[(W?\d+)\]")
-
-
-def _sentences(text: str) -> list[str]:
-    return [s.strip() for s in re.split(r"(?<=[.!?])\s+", text or "") if len(s.strip()) > 30]
-
-
-def _figure_density(text: str) -> float:
-    """Share of substantive sentences carrying at least one number — the
-    'no generic filler' contract."""
-    sents = _sentences(text)
-    if not sents:
-        return 0.0
-    return sum(1 for s in sents if NUMBERY.search(s)) / len(sents)
 
 
 def audit_artifact(art: dict) -> list[str]:

@@ -42,6 +42,11 @@ async def _lifespan(app: FastAPI):
         n = get_stores().runs.reconcile_orphans()
         if n:
             log.info("reconciled %d orphaned run(s) from a prior session", n)
+        # Reclaim evidence bundles frozen by a run that died before its artifact
+        # write (startup-only — never mid-run, where the bundle is in flight).
+        g = get_stores().evidence.gc_orphan_bundles()
+        if g:
+            log.info("garbage-collected %d orphaned evidence bundle(s)", g)
     except Exception as exc:  # never fatal at boot
         log.warning("run reconciliation skipped: %s", exc)
     # Heal thesis-health plans whose kill-criterion/risk comparators were stored
