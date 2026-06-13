@@ -383,7 +383,41 @@ def respond_item(stores, item_id: str, response: str, payload: dict | None = Non
                            "Constitution is required and the recommendation must "
                            "name a catalog metric not already under review. "
                            "Nothing changed.")
+    # Make judgment responses DO what their label implies, and always report
+    # back so a feedback action never looks like a silent dismiss. (watch /
+    # interested only appear on constitution-fit items, so they never collide
+    # with the proposal/recommendation notes set above.)
+    ticker = (item.get("ticker") or "").upper()
+    if response == "watch" and ticker:
+        wl = stores.context.watchlist_by_name("Watching") or stores.context.create_watchlist("Watching")
+        stores.context.add_ticker(wl["id"], ticker)
+        out["note"] = (f"Added {ticker} to your Watching list — and recorded the "
+                       "signal for future strategy learning.")
+    elif response == "interested" and ticker:
+        from backend.workflows import thesis as _thesis
+        intake = stores.runs.get_workbench(_thesis.INTAKE_KEY) or {}
+        items = list(intake.get("items") or [])
+        if not any(str(i.get("ticker", "")).upper() == ticker for i in items):
+            items.append({"ticker": ticker, "provenance": "interested"})
+        intake["items"] = items
+        intake["tickers"] = [i["ticker"] for i in items]
+        stores.runs.set_workbench(_thesis.INTAKE_KEY, intake)
+        out["note"] = (f"Queued {ticker} for your next Thesis run — and recorded the "
+                       "signal. Nothing runs until you start Thesis.")
+    elif res["kind"] in ("feedback", "both") and "note" not in out:
+        label = _RESPONSE_LABELS.get(response, response.replace("_", " "))
+        out["note"] = (f"Recorded “{label}”" + (f" on {ticker}" if ticker else "")
+                       + " — this trains your future strategy suggestions.")
     return out
+
+
+# Human labels for the toast confirmation of a judgment response.
+_RESPONSE_LABELS = {
+    "interested": "Interested", "watch": "Watch", "not_strategy_fit": "Not strategy fit",
+    "too_risky": "Too risky", "already_know": "Already know", "reviewed": "Reviewed",
+    "not_material": "Not material", "thesis_still_intact": "Thesis still intact",
+    "already_acted": "Already acted", "keep_watching": "Keep watching", "dismiss": "Dismissed",
+}
 
 
 def _recommendation_to_proposal(stores, record_id: str) -> dict | None:

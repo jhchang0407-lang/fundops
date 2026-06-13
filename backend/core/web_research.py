@@ -32,24 +32,51 @@ FETCH_TIMEOUT_S = 20
 MAX_RESULTS = 5
 SNIPPET_CHARS = 300
 
+# Keyed search-API providers (DuckDuckGo is the keyless fallback; "harness"
+# defers to the coding-agent harness's own web tool — see active_provider).
 WEB_PROVIDERS = {
     "tavily": {"label": "Tavily", "env": "TAVILY_API_KEY",
                "console_url": "https://app.tavily.com"},
     "brave": {"label": "Brave Search", "env": "BRAVE_API_KEY",
               "console_url": "https://api-dashboard.search.brave.com"},
+    "serper": {"label": "Serper (Google)", "env": "SERPER_API_KEY",
+               "console_url": "https://serper.dev/api-key"},
 }
+
+# Every choice the user can pin in Settings (in addition to per-provider keys).
+PROVIDER_CHOICES = [
+    {"id": "auto", "label": "Auto (keyed if set, else DuckDuckGo)", "keyed": False},
+    {"id": "duckduckgo", "label": "DuckDuckGo (keyless)", "keyed": False},
+    {"id": "tavily", "label": "Tavily", "keyed": True},
+    {"id": "brave", "label": "Brave Search", "keyed": True},
+    {"id": "serper", "label": "Serper (Google)", "keyed": True},
+    {"id": "harness", "label": "Coding-agent harness (no key)", "keyed": False},
+]
 
 
 def enabled() -> bool:
     return bool(opconfig.load()["providers"].get("web_search"))
 
 
+def chosen_provider() -> str:
+    """The user's pinned backend choice; 'auto' by default."""
+    return opconfig.load()["providers"].get("web_search_provider") or "auto"
+
+
 def active_provider() -> str | None:
-    """Which search backend would serve a query right now: a keyed provider
-    when its key is present, else the keyless DuckDuckGo fallback, else None
-    when the toggle is off."""
+    """Which backend serves a query right now. Honors the user's explicit choice;
+    'auto' picks a keyed provider (Tavily/Brave/Serper) when its key is present
+    else keyless DuckDuckGo. None when web search is toggled off."""
     if not enabled():
         return None
+    choice = chosen_provider()
+    if choice == "harness":
+        return "harness"          # the agent harness does the search itself
+    if choice in ("duckduckgo", "ddg"):
+        return "ddg"
+    if choice in WEB_PROVIDERS:    # an explicitly pinned keyed provider
+        return choice
+    # auto (or unknown): first keyed provider with a key, else keyless DDG.
     for pid, spec in WEB_PROVIDERS.items():
         if opconfig.secret(pid, spec["env"]):
             return pid
@@ -89,6 +116,17 @@ def _search_brave(query: str, key: str, max_results: int) -> list[dict]:
     return [{"title": _clip(r.get("title")), "url": r.get("url"),
              "snippet": _clip(r.get("description"))}
             for r in rows if r.get("url")]
+
+
+def _search_serper(query: str, key: str, max_results: int) -> list[dict]:
+    body = json.dumps({"q": query, "num": max_results}).encode()
+    payload = json.loads(_http("https://google.serper.dev/search",
+                               headers={"X-API-KEY": key, "Content-Type": "application/json"},
+                               data=body))
+    rows = (payload.get("organic") or [])[:max_results]
+    return [{"title": _clip(r.get("title")), "url": r.get("link"),
+             "snippet": _clip(r.get("snippet"))}
+            for r in rows if r.get("link")]
 
 
 _DDG_RESULT = re.compile(
@@ -137,15 +175,22 @@ async def search(query: str, max_results: int = MAX_RESULTS,
     if provider is None:
         return {"provider": None, "results": [],
                 "note": "web search disabled in Settings"}
+    if provider == "harness":
+        # The coding-agent harness searches inline during the model call — there
+        # is no separate fetch here. Callers feed the model its own web tool.
+        return {"provider": "harness", "results": [],
+                "note": "web search handled by the coding-agent harness"}
     max_results = max(1, min(int(max_results), MAX_RESULTS))
+    _DISPATCH = {"tavily": _search_tavily, "brave": _search_brave, "serper": _search_serper}
     results: list[dict] = []
     try:
-        if provider == "tavily":
-            key = opconfig.secret("tavily", WEB_PROVIDERS["tavily"]["env"])
-            results = await asyncio.to_thread(_search_tavily, query, key, max_results)
-        elif provider == "brave":
-            key = opconfig.secret("brave", WEB_PROVIDERS["brave"]["env"])
-            results = await asyncio.to_thread(_search_brave, query, key, max_results)
+        if provider in _DISPATCH:
+            key = opconfig.secret(provider, WEB_PROVIDERS[provider]["env"])
+            if key:
+                results = await asyncio.to_thread(_DISPATCH[provider], query, key, max_results)
+            else:  # pinned a keyed provider but no key — fall back to keyless
+                provider = "ddg"
+                results = await asyncio.to_thread(_search_ddg, query, max_results)
         else:
             results = await asyncio.to_thread(_search_ddg, query, max_results)
     except Exception as exc:

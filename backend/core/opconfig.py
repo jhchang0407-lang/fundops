@@ -37,13 +37,20 @@ DEFAULTS: dict[str, Any] = {
     },
     "providers": {
         "sec_user_agent": "FundOps research workspace (contact: user@example.com)",
-        "web_search": False,
+        # On by default so thematic research can pull market sizing + major players
+        # from the web. Toggle in Settings.
+        "web_search": True,
+        # Which backend serves web search: 'auto' picks a keyed provider (Tavily/
+        # Brave/Serper) if its key is set else keyless DuckDuckGo; or pin one of
+        # 'duckduckgo'|'tavily'|'brave'|'serper'; or 'harness' to let the coding-
+        # agent harness do the search itself (no key needed, agent_cli only).
+        "web_search_provider": "auto",
     },
     "data": {
         # Bulk-first ingestion (ADR-0059): one bootstrap download, then daily
         # index-file ticks. Live provider calls are reserved for interactive
         # work and targeted top-ups.
-        "universe_default": "russell2000",
+        "universe_default": "broad_market",
         # 5y daily bars for the whole universe: momentum/volatility/dollar-
         # volume metrics and long-range charts need the depth, and the batch
         # download cost is a one-time bootstrap concern (~2.5M rows at

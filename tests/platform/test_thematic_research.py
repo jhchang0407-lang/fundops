@@ -94,3 +94,54 @@ async def test_thematic_no_resolvable_companies_is_graceful(
     out = await research_runs.run_thematic(stores, "obscure theme")
     assert out["ok"] is False
     assert "no companies" in out["note"].lower()
+    # Even a no-company run is recorded + finalized (no orphan 'running' run).
+    run = stores.runs.latest_run("thematic")
+    assert run and run["status"] == "completed"
+    assert stores.runs.get_workbench("thematic")["note"]
+
+
+# --- async lifecycle + progress -----------------------------------------------------
+
+def test_prepare_thematic_opens_a_guardable_run(stores):
+    rid = research_runs.prepare_thematic(stores, "drones")
+    # The concurrency guard (route) keys off active_run_id; the workbench drives the UI.
+    assert stores.runs.active_run_id("thematic") == rid
+    wb = stores.runs.get_workbench("thematic")
+    assert wb["status"] == "running" and wb["theme"] == "drones" and wb["run_id"] == rid
+    assert wb["stage"] == "discover"
+
+
+@pytest.mark.asyncio
+async def test_thematic_records_steps_and_workbench(
+        stores, offline_ai, seeded, fake_discovery, fake_filings):
+    out = await research_runs.run_thematic(stores, "drone market", limit=10)
+    assert out["ok"] is True
+    run = stores.runs.latest_run("thematic")
+    assert run and run["status"] == "completed"
+    assert run["stats"]["artifact_id"] == out["artifact_id"]
+    assert run["stats"]["deep_read"] == 3
+    # Every stage is recorded as a step, in order — this is what the Runs page +
+    # progress bar read.
+    assert [s["name"] for s in stores.runs.steps_for(run["id"])] == [
+        "discover", "read_filings", "web_research", "synthesize", "save"]
+    wb = stores.runs.get_workbench("thematic")
+    assert wb["status"] == "completed" and wb["stage"] == "done"
+    assert wb["artifact_id"] == out["artifact_id"] and wb["selected"] == 3
+
+
+@pytest.mark.asyncio
+async def test_theme_web_merges_dedupes_and_caps(monkeypatch):
+    calls: list[str] = []
+
+    async def fake_search(query, max_results=5, ticker=None):
+        calls.append(query)
+        return {"provider": "x", "note": "", "results": [
+            {"title": f"u{len(calls)}", "url": f"http://u/{len(calls)}", "snippet": "s"},
+            {"title": "shared", "url": "http://shared", "snippet": "s"},  # repeats across angles
+        ]}
+
+    monkeypatch.setattr(research_runs.web_research, "search", fake_search)
+    block, sources = await research_runs._theme_web("drone market")
+    assert len(calls) == research_runs.THEME_WEB_QUERIES          # one per angle, concurrent
+    assert len(sources) == research_runs.THEME_WEB_QUERIES + 1    # 5 unique + 1 shared (deduped)
+    assert block and block.count("shared") == 1                  # shared URL appears once

@@ -157,6 +157,35 @@ def test_dead_evidence_records_table_dropped(stores):
     assert row is None
 
 
+def test_opportunity_responses_take_action_and_report(stores):
+    """Watch/Interested do what their labels say; every feedback response
+    returns a human note so the action is never an invisible dismiss."""
+    from backend.services.dashboard_service import respond_item
+    from backend.workflows import thesis
+
+    iid = stores.dashboard.upsert_item(
+        "attention", "portfolio_review", "constitution_fit", "scr_1", "v1",
+        "ADBE Constitution-fit opportunity", ticker="ADBE")
+    res = respond_item(stores, iid, "watch")
+    assert "Watching" in (res["note"] or "")
+    wl = stores.context.watchlist_by_name("Watching")
+    assert wl and "ADBE" in wl["tickers"]
+
+    iid2 = stores.dashboard.upsert_item(
+        "attention", "portfolio_review", "constitution_fit", "scr_2", "v1",
+        "V Constitution-fit opportunity", ticker="V")
+    res2 = respond_item(stores, iid2, "interested")
+    assert "Thesis" in (res2["note"] or "")
+    intake = stores.runs.get_workbench(thesis.INTAKE_KEY) or {}
+    assert any(i["ticker"] == "V" for i in intake.get("items") or [])
+
+    iid3 = stores.dashboard.upsert_item(
+        "attention", "portfolio_review", "constitution_fit", "scr_3", "v1",
+        "NVDA Constitution-fit opportunity", ticker="NVDA")
+    res3 = respond_item(stores, iid3, "too_risky")
+    assert "Recorded" in (res3["note"] or "") and "NVDA" in res3["note"]
+
+
 def test_clear_pipeline_survives_dropped_table(client):
     # /clear-pipeline used to DELETE FROM evidence_records; after the drop that
     # statement was removed in lockstep, so the endpoint must still succeed.

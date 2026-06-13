@@ -6,7 +6,7 @@
  * cited note artifacts.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -28,6 +28,7 @@ import {
   getSectors,
   getThemeDashboard,
   listWatchlists,
+  getThematicCurrent,
   runThematicResearch,
   searchFilingsFulltext,
   startResearchRun,
@@ -68,9 +69,10 @@ function SectorBrowser({
           <button
             className="rail-item"
             style={{
-              display: 'flex', width: '100%', justifyContent: 'space-between',
-              background: 'none', border: 'none', cursor: 'pointer',
+              display: 'flex', width: '100%', alignItems: 'flex-start', gap: 6,
+              background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left',
               padding: '5px 8px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)',
+              lineHeight: 1.35,
             }}
             onClick={() => {
               setOpen(open === s.sector ? null : s.sector);
@@ -78,8 +80,11 @@ function SectorBrowser({
               onSelect({ type: 'industry', sector: s.sector, label: s.sector });
             }}
           >
-            <span>{open === s.sector ? '▾' : '▸'} {s.sector}</span>
-            <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-data)' }}>{s.count}</span>
+            <span style={{ flexShrink: 0, width: 12, color: 'var(--text-muted)' }}>
+              {open === s.sector ? '▾' : '▸'}
+            </span>
+            <span style={{ flex: 1, minWidth: 0 }}>{s.sector}</span>
+            <span style={{ flexShrink: 0, color: 'var(--text-muted)', fontFamily: 'var(--font-data)' }}>{s.count}</span>
           </button>
           {open === s.sector && s.industries.length > 8 && (
             <input
@@ -98,18 +103,18 @@ function SectorBrowser({
               <button
                 key={i.industry}
                 style={{
-                  display: 'flex', width: '100%', justifyContent: 'space-between',
+                  display: 'flex', width: '100%', alignItems: 'flex-start', gap: 6,
                   background:
                     selected?.type === 'industry' && selected.industry === i.industry
                       ? 'var(--bg-elevated)' : 'none',
-                  border: 'none', cursor: 'pointer', padding: '4px 8px 4px 22px',
+                  border: 'none', cursor: 'pointer', padding: '4px 8px 4px 26px',
                   color: 'var(--text-secondary)', fontSize: 'var(--text-xs)',
-                  borderRadius: 'var(--radius-sm)',
+                  borderRadius: 'var(--radius-sm)', textAlign: 'left', lineHeight: 1.35,
                 }}
                 onClick={() => onSelect({ type: 'industry', industry: i.industry, label: i.industry })}
               >
-                <span style={{ textAlign: 'left' }}>{i.industry}</span>
-                <span style={{ fontFamily: 'var(--font-data)' }}>{i.count}</span>
+                <span style={{ flex: 1, minWidth: 0 }}>{i.industry}</span>
+                <span style={{ flexShrink: 0, fontFamily: 'var(--font-data)' }}>{i.count}</span>
               </button>
             ))}
         </div>
@@ -458,28 +463,55 @@ function GroupDashboard({ selection }: { selection: Selection }) {
 
 /* ────────────────────────── thematic full-text search ────────────────────────── */
 
+const THEME_STAGES: [string, string][] = [
+  ['discover', 'Discovering companies'],
+  ['reading', 'Reading 10-Ks'],
+  ['web', 'Web market research'],
+  ['synthesize', 'Writing the report'],
+  ['save', 'Saving report'],
+];
+
 function FulltextSearch() {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<FulltextHit[] | null>(null);
+  const [watching, setWatching] = useState(false);
   const search = useMutation({
     mutationFn: () => searchFilingsFulltext(query.trim()),
     onSuccess: (res) => setHits(res.hits),
   });
+  // Live run state — polled every 2s while a run is in flight; the first fetch
+  // on mount re-attaches to a run still running after a reload.
+  const current = useQuery({
+    queryKey: ['thematic-current'],
+    queryFn: getThematicCurrent,
+    refetchInterval: (q) => (q.state.data?.status === 'running' ? 2000 : false),
+  });
+  const cur = current.data;
+  const running = cur?.status === 'running';
+  // Recover an in-flight run after a reload so its completion still opens the report.
+  useEffect(() => { if (running) setWatching(true); }, [running]);
+  // Open the report when a run we're watching finishes (never on a stale mount).
+  useEffect(() => {
+    if (watching && cur?.status === 'completed' && cur.artifact_id) {
+      setWatching(false);
+      navigate(`/artifact/${cur.artifact_id}`);
+    }
+  }, [watching, cur?.status, cur?.artifact_id, navigate]);
+
   const deep = useMutation({
     mutationFn: () => runThematicResearch(query.trim()),
-    onSuccess: (res) => {
-      if (res.ok && res.artifact_id) navigate(`/artifact/${res.artifact_id}`);
-    },
+    onSuccess: () => { setWatching(true); current.refetch(); },
   });
-  const busy = deep.isPending;
+  const busy = running || deep.isPending;
+  const stageIdx = THEME_STAGES.findIndex(([k]) => k === cur?.stage);
 
   return (
     <div className="card" style={{ padding: '12px 14px', marginBottom: 12 }}>
       <div className="card-title">Thematic deep research</div>
       <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginBottom: 8 }}>
-        Name a theme — FundOps discovers the companies via EDGAR full-text, reads each one's
-        10-K (Business, Risk Factors, MD&A), and writes a cited market report. SEC filings only.
+        Name a theme — FundOps discovers companies via EDGAR full-text, deep-reads each one's
+        10-K, and pulls web market context (sizing + major players) into a cited report.
       </div>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <input
@@ -503,10 +535,29 @@ function FulltextSearch() {
       </div>
 
       {busy && (
-        <div className="banner banner-positive" style={{ marginTop: 8, fontSize: 'var(--text-xs)', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span className="pulse-dot" />
-          Discovering companies and reading their 10-Ks — this can take a few minutes on a
-          local coding agent; faster with an API provider.
+        <div className="banner banner-positive" style={{ marginTop: 10, fontSize: 'var(--text-xs)' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+            <span className="pulse-dot" />
+            Researching {cur?.theme ? `“${cur.theme}”` : 'theme'} — you can leave this page; it keeps running.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            {THEME_STAGES.map(([key, label], i) => {
+              const state = stageIdx < 0
+                ? (i === 0 ? 'active' : 'pending')
+                : i < stageIdx ? 'done' : i === stageIdx ? 'active' : 'pending';
+              const extra = key === 'reading' && cur?.selected != null
+                ? ` (${cur?.read ?? 0}/${cur.selected})` : '';
+              return (
+                <div key={key} style={{ display: 'flex', gap: 6, alignItems: 'center',
+                  color: state === 'pending' ? 'var(--text-muted)' : 'var(--text-secondary)' }}>
+                  <span style={{ width: 14, textAlign: 'center' }}>
+                    {state === 'done' ? '✓' : state === 'active' ? '◌' : '·'}
+                  </span>
+                  <span style={{ fontWeight: state === 'active' ? 600 : 400 }}>{label}{extra}</span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
       {deep.isError && (
@@ -514,8 +565,13 @@ function FulltextSearch() {
           {(deep.error as Error).message}
         </div>
       )}
-      {deep.data && !deep.data.ok && (
-        <div className="empty-note" style={{ marginTop: 8 }}>{deep.data.note}</div>
+      {!running && cur?.status === 'failed' && cur.error && (
+        <div className="banner banner-warning" style={{ marginTop: 8, fontSize: 'var(--text-xs)' }}>
+          Research failed: {cur.error}
+        </div>
+      )}
+      {!running && cur?.status === 'completed' && cur.note && !cur.artifact_id && (
+        <div className="empty-note" style={{ marginTop: 8 }}>{cur.note}</div>
       )}
 
       {search.isError && (

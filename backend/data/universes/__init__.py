@@ -46,6 +46,14 @@ PRESETS = {
         "file": "russell2000.txt",
         "count": 1906,
     },
+    "broad_market": {
+        "label": "Broad Market (~2,400)",
+        "description": "Large-cap leaders (S&P 500 + Nasdaq 100 + US Large Cap 200) plus the "
+                       "Russell 2000 small caps — a Russell 3000-style cross-section so thematic "
+                       "and sector work sees market leaders, not just sub-scale filers.",
+        "file": "broad_market.txt",
+        "count": 2398,
+    },
 }
 
 
@@ -69,6 +77,14 @@ _ALIASES = {
     "russell-2000": "russell2000",
     "iwm": "russell2000",
     "rut": "russell2000",
+    # Broad-market aliases
+    "broad": "broad_market",
+    "broadmarket": "broad_market",
+    "broad-market": "broad_market",
+    "russell3000": "broad_market",
+    "russell_3000": "broad_market",
+    "russell-3000": "broad_market",
+    "total_market": "broad_market",
 }
 
 

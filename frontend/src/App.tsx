@@ -5,6 +5,7 @@ import { ChatDrawer } from './components/chat/ChatDrawer';
 import { AskPopover } from './components/AskAnywhere';
 import { CommandPalette } from './components/CommandPalette';
 import { WiringOverlay } from './components/WiringOverlay';
+import { ToastProvider } from './components/Toast';
 import Home from './pages/Home';
 import Dashboard from './pages/Dashboard';
 import Runs from './pages/Runs';
@@ -69,6 +70,7 @@ export default function App() {
 
   return (
     <BrowserRouter>
+      <ToastProvider>
       <div className="page-shell">
         <Sidebar onOpenWiring={() => setWiringOpen(true)} onOpenPalette={() => setPaletteOpen(true)} />
         <div className="page-content">
@@ -101,6 +103,7 @@ export default function App() {
         <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
         {wiringOpen && <WiringOverlay onClose={() => setWiringOpen(false)} />}
       </div>
+      </ToastProvider>
     </BrowserRouter>
   );
 }

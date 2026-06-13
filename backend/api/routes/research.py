@@ -4,6 +4,8 @@ artifacts."""
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
 
@@ -11,6 +13,14 @@ from backend.services import research_hub
 from backend.stores import get_stores
 
 router = APIRouter()
+
+_thematic_tasks: set[asyncio.Task] = set()  # keep kicked thematic runs alive until done
+
+
+def _kick(coro) -> None:
+    task = asyncio.get_running_loop().create_task(coro)
+    _thematic_tasks.add(task)
+    task.add_done_callback(_thematic_tasks.discard)
 
 
 @router.get("/research/sectors")
@@ -78,7 +88,27 @@ async def thematic_research(body: dict = Body(...)):
     limit = body.get("limit")
     limit = min(int(limit), research_runs.THEME_COMPANY_CAP) if isinstance(limit, int) and limit > 0 \
         else research_runs.THEME_COMPANY_CAP
-    return await research_runs.run_thematic(get_stores(), query, limit=limit)
+    stores = get_stores()
+    # Non-blocking: kick the run and return a run_id immediately so the UI can
+    # show live stage progress (discover → read → web → synthesize → save) and
+    # survive reloads/timeouts. One thematic run at a time (concurrency guard).
+    existing = stores.runs.active_run_id(research_runs.THEME_CAPABILITY)
+    if existing:
+        return {"run_id": existing, "already_running": True}
+    rid = research_runs.prepare_thematic(stores, query)
+    _kick(research_runs.execute_thematic(stores, rid, query, limit))
+    return {"run_id": rid, "already_running": False}
+
+
+@router.get("/research/thematic/current")
+async def thematic_current():
+    """Live thematic-run state for the progress UI: {status, stage, theme,
+    selected, read, discovered, artifact_id, title, note}. {status:'idle'} when
+    none has run this session."""
+    from backend.workflows import research_runs
+
+    wb = get_stores().runs.get_workbench(research_runs.THEME_CAPABILITY)
+    return wb or {"status": "idle"}
 
 
 @router.get("/research/fulltext")

@@ -108,7 +108,9 @@ async def get_settings():
         "ai_key_present": opconfig.key_presence_map(),
         "web_search": {
             "enabled": web_research.enabled(),
+            "provider": web_research.chosen_provider(),
             "active_provider": web_research.active_provider(),
+            "choices": web_research.PROVIDER_CHOICES,
             "providers": [
                 {"id": pid, "label": spec["label"], "env": spec["env"],
                  "console_url": spec["console_url"],

@@ -775,12 +775,13 @@ const WEB_PROVIDER_LABELS: Record<string, string> = {
 };
 
 function WebSearchRows({
-  data, webSearch, busy, onToggle,
+  data, webSearch, busy, onToggle, onProvider,
 }: {
   data?: SettingsResponse;
   webSearch: boolean;
   busy: boolean;
   onToggle: () => void;
+  onProvider: (id: string) => void;
 }) {
   const qc = useQueryClient();
   const ws = data?.web_search;
@@ -812,6 +813,28 @@ function WebSearchRows({
           {webSearch ? 'Enabled' : 'Disabled'}
         </button>
       </div>
+      {webSearch && (
+        <div className="settings-row">
+          <span className="settings-key">
+            Search backend
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-data)' }}>
+              Choose a provider, or “Auto”. “Coding-agent harness” lets your CLI agent search
+              with no key (agent_cli only).
+            </div>
+          </span>
+          <select
+            className="field"
+            value={ws?.provider ?? 'auto'}
+            disabled={busy}
+            onChange={(e) => onProvider(e.target.value)}
+            style={fieldStyle(280)}
+          >
+            {(ws?.choices ?? [{ id: 'auto', label: 'Auto' }]).map((c) => (
+              <option key={c.id} value={c.id}>{c.label}</option>
+            ))}
+          </select>
+        </div>
+      )}
       {webSearch && (
         <div className="settings-row">
           <span className="settings-key">
@@ -1028,6 +1051,7 @@ export default function Settings() {
           webSearch={webSearch}
           busy={save.isPending || config == null}
           onToggle={() => save.mutate({ providers: { web_search: !webSearch } })}
+          onProvider={(id) => save.mutate({ providers: { web_search_provider: id } })}
         />
       </div>
 

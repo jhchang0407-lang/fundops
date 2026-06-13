@@ -81,9 +81,21 @@ class AIGateway:
     def _agent_cli_command() -> list[str] | None:
         import shutil
         cfg = opconfig.load()["ai"]["agent_cli"]
-        cmd = cfg.get("command") or AGENT_CLI_PRESETS.get(cfg.get("preset", "claude"))
+        preset = cfg.get("preset", "claude")
+        cmd = cfg.get("command") or AGENT_CLI_PRESETS.get(preset)
         if not cmd or shutil.which(cmd[0]) is None:
             return None
+        cmd = list(cmd)
+        # 'harness' web-search mode (Settings): let the headless Claude session
+        # use its OWN web tools — no API key needed. Only the default claude
+        # preset; a custom command override is left untouched. Permitting the
+        # tools is harmless for model calls that don't need them.
+        providers = opconfig.load()["providers"]
+        if (not cfg.get("command") and preset == "claude"
+                and providers.get("web_search")
+                and providers.get("web_search_provider") == "harness"
+                and "--allowedTools" not in cmd):
+            cmd = cmd + ["--allowedTools", "WebSearch", "WebFetch"]
         return cmd
 
     @property

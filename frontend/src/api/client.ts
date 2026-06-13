@@ -898,10 +898,30 @@ export interface ThematicResult {
   discovered?: number;
 }
 
-/** Thematic deep research: theme → discover companies → deep-read 10-Ks →
- * synthesize a cited report. SEC-only, bounded. Slow on agent_cli. */
+/** Live thematic-run state (the /research/thematic/current workbench). */
+export interface ThematicCurrent {
+  status: 'idle' | 'running' | 'completed' | 'failed';
+  run_id?: string;
+  theme?: string;
+  stage?: 'discover' | 'reading' | 'web' | 'synthesize' | 'save' | 'done';
+  selected?: number;
+  read?: number;
+  discovered?: number;
+  artifact_id?: string | null;
+  title?: string;
+  note?: string | null;
+  error?: string;
+}
+
+/** Thematic deep research: theme → discover companies → deep-read 10-Ks → web
+ * augmentation → synthesize a cited report. Async: returns a run_id; poll
+ * getThematicCurrent() for live stage progress, open the artifact when done. */
 export const runThematicResearch = (query: string, limit?: number) =>
-  post<ThematicResult>('/research/thematic', { query, ...(limit ? { limit } : {}) });
+  post<{ run_id: string; already_running?: boolean }>(
+    '/research/thematic', { query, ...(limit ? { limit } : {}) });
+
+export const getThematicCurrent = () =>
+  fetchJSON<ThematicCurrent>('/research/thematic/current');
 
 export interface ResearchNote {
   id: string;
@@ -1208,7 +1228,7 @@ export const respondDashboard = (
   response: string,
   payload?: Record<string, unknown>,
 ) =>
-  post<{ ok: boolean; status?: string }>(
+  post<{ ok: boolean; status?: string; already_responded?: boolean; note?: string }>(
     `/dashboard/items/${encodeURIComponent(itemId)}/respond`,
     payload ? { response, payload } : { response },
   );
@@ -1339,7 +1359,9 @@ export interface WebSearchProviderStatus {
 
 export interface WebSearchStatus {
   enabled: boolean;
+  provider?: string;
   active_provider: string | null;
+  choices?: { id: string; label: string; keyed: boolean }[];
   providers: WebSearchProviderStatus[];
 }
 

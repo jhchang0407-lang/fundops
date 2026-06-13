@@ -46,6 +46,46 @@ def test_provider_selection_prefers_keys(monkeypatch):
     assert web_research.active_provider() == "ddg"
 
 
+def test_explicit_provider_choice_is_honored(monkeypatch):
+    monkeypatch.setattr(web_research, "enabled", lambda: True)
+    # A pinned keyed provider wins even without inspecting keys; ddg/harness map through.
+    for choice, expect in [("brave", "brave"), ("serper", "serper"),
+                           ("tavily", "tavily"), ("duckduckgo", "ddg"), ("harness", "harness")]:
+        monkeypatch.setattr(web_research, "chosen_provider", lambda c=choice: c)
+        assert web_research.active_provider() == expect
+
+
+@pytest.mark.asyncio
+async def test_harness_mode_does_no_separate_fetch(monkeypatch):
+    monkeypatch.setattr(web_research, "enabled", lambda: True)
+    monkeypatch.setattr(web_research, "chosen_provider", lambda: "harness")
+    out = await web_research.search("drone market")
+    assert out["provider"] == "harness" and out["results"] == []
+    assert "harness" in out["note"]
+
+
+@pytest.mark.asyncio
+async def test_serper_dispatch_when_keyed(monkeypatch):
+    monkeypatch.setattr(web_research, "enabled", lambda: True)
+    monkeypatch.setattr(web_research, "chosen_provider", lambda: "serper")
+    monkeypatch.setattr(opconfig, "secret", lambda name, env=None: "k" if name == "serper" else None)
+    monkeypatch.setattr(web_research, "_search_serper",
+                        lambda q, key, n: [{"title": "S", "url": "https://s", "snippet": "x"}])
+    out = await web_research.search("drone market")
+    assert out["provider"] == "serper" and out["results"][0]["url"] == "https://s"
+
+
+@pytest.mark.asyncio
+async def test_pinned_keyed_without_key_falls_back_to_ddg(monkeypatch):
+    monkeypatch.setattr(web_research, "enabled", lambda: True)
+    monkeypatch.setattr(web_research, "chosen_provider", lambda: "tavily")  # no key set
+    monkeypatch.setattr(opconfig, "secret", lambda name, env=None: None)
+    monkeypatch.setattr(web_research, "_search_ddg",
+                        lambda q, n: [{"title": "D", "url": "https://d", "snippet": "x"}])
+    out = await web_research.search("x")
+    assert out["provider"] == "ddg" and out["results"][0]["url"] == "https://d"
+
+
 @pytest.mark.asyncio
 async def test_search_failure_degrades_to_empty(monkeypatch):
     monkeypatch.setattr(web_research, "enabled", lambda: True)

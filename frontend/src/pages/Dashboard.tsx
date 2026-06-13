@@ -12,6 +12,7 @@ import {
 } from '../api/client';
 import type { ActivityRow, DashboardItem, ResponseSetEntry } from '../api/client';
 import { PageHeader } from '../components/PageHeader';
+import { useToast } from '../components/Toast';
 
 /* ────────────────────────── helpers ────────────────────────── */
 
@@ -270,6 +271,7 @@ function Activity({ rows }: { rows: ActivityRow[] }) {
 export default function Dashboard() {
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const toast = useToast();
   const [busyItemId, setBusyItemId] = useState<string | null>(null);
   const [monitoringNote, setMonitoringNote] = useState<string | null>(null);
   const [pipelineRunId, setPipelineRunId] = useState<string | null>(null);
@@ -299,7 +301,7 @@ export default function Dashboard() {
     mutationFn: ({ item, code }: { item: DashboardItem; code: string }) =>
       respondDashboard(item.id, code),
     onMutate: ({ item }) => setBusyItemId(item.id),
-    onSuccess: (_res, { item, code }) => {
+    onSuccess: (res, { item, code }) => {
       // "Open" means open the thing — recording the response alone would be
       // an invisible no-op from the user's point of view.
       if (code === 'open') {
@@ -309,6 +311,10 @@ export default function Dashboard() {
           const art = refs.find((r) => typeof r.id === 'string' && String(r.id).startsWith('art_'));
           if (art) navigate(`/artifact/${art.id}`);
         }
+      } else if (res?.note) {
+        // Feedback/learning responses resolve the item silently; surface what
+        // was captured (and any concrete effect) so it never looks like a no-op.
+        toast(res.note);
       }
     },
     onError: (err: Error, { item }) =>

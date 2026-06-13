@@ -349,6 +349,18 @@ def test_portfolio_refresh_prices_upserts_todays_close(stores, monkeypatch):
                 data = [{"symbol": t, "price": 60.0} for t in tickers]
             return R()
 
+    # refresh_prices() only stamps today's close into price_history on weekdays
+    # (markets don't trade weekends). Freeze its "today" to a known weekday so
+    # the assertion below is deterministic regardless of when the suite runs.
+    import backend.services.portfolio_service as ps_mod
+    frozen = datetime(2025, 1, 6, tzinfo=timezone.utc)  # a Monday
+
+    class _FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return frozen.astimezone(tz) if tz else frozen
+
+    monkeypatch.setattr(ps_mod, "datetime", _FrozenDatetime)
     monkeypatch.setattr(MarketDataService, "_yfinance", lambda self: FakeConnector())
     stores.portfolio.add_lot("AAA", 10, 50.0, "2025-01-02")
     stores.portfolio.rebuild_holdings()
@@ -356,5 +368,5 @@ def test_portfolio_refresh_prices_upserts_todays_close(stores, monkeypatch):
     n = asyncio.run(PortfolioService(stores).refresh_prices())
     assert n == 1
     latest = stores.bulk.latest_close("AAA")
-    assert latest == {"date": _today().isoformat(), "close": 60.0}
+    assert latest == {"date": frozen.date().isoformat(), "close": 60.0}
     assert stores.portfolio.prices()["AAA"] == 60.0
