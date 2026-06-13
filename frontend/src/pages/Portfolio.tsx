@@ -17,6 +17,7 @@ import type { HoldingRow } from '../api/client';
 import { exportUrls, getPortfolioAnalytics } from '../api/client';
 import { TickerLink } from '../components/workflow/StageTable';
 import { ask } from '../components/AskAnywhere';
+import { useToast } from '../components/Toast';
 import { fmtDate, fmtPct, fmtPnl, fmtPrice, fmtShares, fmtUsdCompact, localToday, pct } from '../utils/formatFinancials';
 import {
   Line,
@@ -608,6 +609,7 @@ function FixLotModal({
 
 export default function Portfolio() {
   const qc = useQueryClient();
+  const toast = useToast();
   const [expanded, setExpanded] = useState<string | null>(null);
   const [entryForm, setEntryForm] = useState<'purchase' | 'sale' | null>(null);
   const [fixLot, setFixLot] = useState<{ id: string; shares: number | null; cost_basis: number | null; purchase_date: string | null } | null>(null);
@@ -616,6 +618,9 @@ export default function Portfolio() {
 
   const refresh = useMutation({
     mutationFn: refreshPortfolio,
+    onSuccess: (res) =>
+      toast(res?.updated ? `Prices refreshed for ${res.updated} holding${res.updated === 1 ? '' : 's'}.`
+                         : 'Prices refreshed — nothing to update (no holdings or markets closed).'),
     onSettled: () => qc.invalidateQueries({ queryKey: ['portfolio'] }),
   });
 
@@ -724,6 +729,10 @@ export default function Portfolio() {
         </div>
       </div>
 
+      {/* Render the entry form right under the header so the button visibly does
+          something — it used to render below the charts, far off-screen. */}
+      {entryForm && <EntryForm kind={entryForm} onClose={() => setEntryForm(null)} />}
+
       <div className="kpi-grid" style={{ marginBottom: 14 }}>
         <div className="kpi-card">
           <div className="kpi-label">Total Value</div>
@@ -756,7 +765,6 @@ export default function Portfolio() {
 
       {holdings.length > 0 && <AnalyticsSection />}
 
-      {entryForm && <EntryForm kind={entryForm} onClose={() => setEntryForm(null)} />}
       {refresh.isError && (
         <div className="banner banner-warning" style={{ marginBottom: 12 }}>
           Price refresh failed: {(refresh.error as Error).message}
