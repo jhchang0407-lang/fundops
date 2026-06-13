@@ -5,18 +5,41 @@ from __future__ import annotations
 from backend.core.sec.client import get_submissions, ticker_to_cik
 
 
-# SIC code ranges to sector names
+# SIC code ranges to sector names. Deliberately finer than the official SIC
+# divisions: "Manufacturing" (2000–3999) spans soda to semiconductors, which
+# made sector-level peer fallbacks meaningless. Specific ranges are listed
+# before broader ones — first match wins.
 SIC_SECTORS = {
     (100, 999): "Agriculture",
+    (1300, 1399): "Oil & Gas",
     (1000, 1499): "Mining",
     (1500, 1799): "Construction",
-    (2000, 3999): "Manufacturing",
-    (4000, 4999): "Transportation & Utilities",
+    (2000, 2199): "Food, Beverage & Tobacco",
+    (2200, 2399): "Textiles & Apparel",
+    (2400, 2799): "Wood, Paper & Publishing",
+    (2830, 2839): "Pharmaceuticals & Biotech",
+    (2800, 2899): "Chemicals",
+    (2900, 2999): "Petroleum Refining",
+    (3000, 3299): "Rubber, Plastics & Glass",
+    (3300, 3499): "Metals",
+    (3500, 3599): "Industrial Machinery & Computers",
+    (3600, 3699): "Electronics & Semiconductors",
+    (3700, 3799): "Transportation Equipment",
+    (3800, 3899): "Instruments & Medical Devices",
+    (3900, 3999): "Miscellaneous Manufacturing",
+    (4800, 4899): "Communications",
+    (4900, 4999): "Utilities",
+    (4000, 4799): "Transportation",
     (5000, 5199): "Wholesale Trade",
     (5200, 5999): "Retail Trade",
-    (6000, 6799): "Finance & Insurance",
-    (6800, 6999): "Real Estate",
-    (7000, 8999): "Services",
+    (6798, 6798): "REITs",
+    (6000, 6299): "Banks & Financial Services",
+    (6300, 6499): "Insurance",
+    (6500, 6599): "Real Estate",
+    (6600, 6999): "Investment & Holding Companies",
+    (7370, 7379): "Software & IT Services",
+    (8000, 8099): "Health Services",
+    (7000, 8999): "Consumer & Business Services",
     (9100, 9729): "Government",
     (9900, 9999): "Non-classifiable",
 }
@@ -95,9 +118,20 @@ SIC_SUBSECTORS = {
 }
 
 
+# Specific SICs whose broad SIC range mislabels them for investment purposes.
+# Computer hardware (3570-3579) otherwise falls in the 3500-3599 "Industrial
+# Machinery & Computers" band, classifying Apple/Dell/etc. as industrials; route
+# them to the technology-hardware sector the platform already uses.
+_SIC_SECTOR_OVERRIDES = {
+    sic: "Electronics & Semiconductors" for sic in range(3570, 3580)
+}
+
+
 def _sic_to_sector(sic_code: int | str) -> str:
     """Map SIC code to broad sector name."""
     sic = int(sic_code) if sic_code else 0
+    if sic in _SIC_SECTOR_OVERRIDES:
+        return _SIC_SECTOR_OVERRIDES[sic]
     for (low, high), sector in SIC_SECTORS.items():
         if low <= sic <= high:
             return sector

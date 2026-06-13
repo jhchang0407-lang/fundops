@@ -1,43 +1,37 @@
-"""Dashboard routes."""
+"""Dashboard routes (api-contract): decision/attention queue projected from
+sources, item responses, explicit rebuild."""
 
-from fastapi import APIRouter
+from __future__ import annotations
 
-from backend.api.deps import get_db, get_job_queue
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from backend.services import dashboard_service
+from backend.stores import get_stores
 
 router = APIRouter()
 
 
+class ResponseIn(BaseModel):
+    response: str
+    payload: dict | None = None
+
+
 @router.get("/dashboard")
 async def get_dashboard():
-    """Get dashboard data: KPIs, funnel, recent activity, agent status."""
-    db = get_db()
-    jobs = get_job_queue()
+    return dashboard_service.overview(get_stores())
 
-    dashboard = db.get_dashboard_data()
 
-    # Parse JSON string fields in portfolio snapshot
-    import json as _json
-    portfolio = dashboard.get("latest_portfolio")
-    if portfolio:
-        for field in ("holdings", "alerts"):
-            val = portfolio.get(field)
-            if isinstance(val, str):
-                try:
-                    portfolio[field] = _json.loads(val)
-                except Exception:
-                    portfolio[field] = []
+@router.post("/dashboard/items/{item_id}/respond")
+async def respond(item_id: str, body: ResponseIn):
+    try:
+        return dashboard_service.respond_item(get_stores(), item_id,
+                                              body.response, body.payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
-    # Add job status
-    running_jobs = jobs.list_jobs(status="running")
-    dashboard["running_jobs"] = running_jobs
-    dashboard["agent_status"] = {
-        "screener": "running" if any(j["agent"] == "screener" for j in running_jobs) else "idle",
-        "thesis": "running" if any(j["agent"] == "thesis" for j in running_jobs) else "idle",
-        "ic_review": "running" if any(j["agent"] == "ic_review" for j in running_jobs) else "idle",
-        "memo": "running" if any(j["agent"] == "memo" for j in running_jobs) else "idle",
-        "library": "idle",
-        "portfolio": "running" if any(j["agent"] == "portfolio" for j in running_jobs) else "idle",
-        "allocator": "running" if any(j["agent"] == "allocator" for j in running_jobs) else "idle",
-    }
 
-    return dashboard
+@router.post("/dashboard/refresh")
+async def refresh_dashboard():
+    dashboard_service.rebuild(get_stores())
+    return {"ok": True}

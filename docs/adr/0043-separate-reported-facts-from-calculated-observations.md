@@ -1,0 +1,3 @@
+# Separate Reported Facts From Calculated Observations
+
+FundOps will store Reported Financial Facts separately from Calculated Financial Observations. Reported facts preserve what a company, filing, taxonomy, or provider supplied for a specific period, while calculated observations preserve FundOps' interpreted Supported Financial Metrics such as ratios, growth rates, trailing-twelve-months values, multi-period averages, derived Q4 values, and sector-specific metrics. Calculated observations must retain Financial Observation Lineage back to their source facts, mappings, formula provenance, derivations, and quality decisions so workflows can use one canonical financial layer without losing auditability or source accountability.

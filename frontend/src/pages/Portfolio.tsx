@@ -1,324 +1,306 @@
-import { useState, useCallback } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../api/client';
-import { Link } from 'react-router-dom';
-import { PageHeader } from '../components/PageHeader';
-import { KpiCard, KpiRow } from '../components/KpiCard';
-import { HealthDot } from '../components/HealthDot';
-import { ExpandableRow } from '../components/ExpandableRow';
-import { fmtPct } from '../utils/formatFinancials';
-import ThesisHealthBar from '../components/ThesisHealthBar';
+/**
+ * Portfolio — ledger-backed holdings. Entries carry explicit intent
+ * ("Record purchase" / "Record sale" — never inferred), corrections are data
+ * fixes (not trades), and price refresh never touches thesis health.
+ */
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  addLot,
+  correctLot,
+  getLedger,
+  getPortfolio,
+  recordSale,
+  refreshPortfolio,
+} from '../api/client';
+import type { HoldingRow } from '../api/client';
+import { exportUrls, getPortfolioAnalytics } from '../api/client';
+import { TickerLink } from '../components/workflow/StageTable';
+import { ask } from '../components/AskAnywhere';
+import { fmtDate, fmtPct, fmtPnl, fmtPrice, fmtShares, fmtUsdCompact, localToday, pct } from '../utils/formatFinancials';
+import {
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip as ChartTooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 
-// ── Types ──────────────────────────────────────────────────────────────
+/* ────────────────────────── Analytics (phase 3) ────────────────────────── */
 
-interface Lot {
-  shares: number;
-  cost_basis: number;
-  date: string;
+function fmtSignedPct(v: number | null | undefined): string {
+  if (v == null) return '—';
+  return `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}%`;
 }
 
-interface Holding {
-  ticker: string;
-  company_name?: string;
-  shares?: number;
-  cost_basis?: number;
-  current_price?: number;
-  pnl?: number;
-  pnl_pct?: number;
-  weight?: number;
-  market_value?: number;
-  health_score?: number;
-  health_trend?: string; // 'up' | 'down' | 'flat'
-  type?: string;
-  buy_date?: string;
-  lots?: Lot[];
-  fair_value?: number;
-  conviction?: number;
-  thesis_synopsis?: string;
-  assumptions?: Assumption[];
-  recent_event?: string;
-  thesis_health?: Assumption[];
-  thesis_events?: { assumption: string; status: string; finding?: string }[];
-}
-
-interface Assumption {
-  text: string;
-  status: 'ok' | 'warning' | 'breach';
-  score?: number;
-  recent?: string;
-}
-
-interface ThesisAlert {
-  type: string;
-  ticker: string;
-  message: string;
-  severity?: 'warning' | 'info' | 'critical';
-}
-
-interface PortfolioData {
-  holdings: Holding[];
-  alerts: ThesisAlert[];
-  total_value: number;
-  total_pnl: number;
-  total_pnl_pct: number;
-  daily_change: number;
-  positions_count: number;
-  avg_health: number;
-  position_breakdown?: string;
-  cash?: number;
-}
-
-interface EditorRow {
-  ticker: string;
-  shares: string;
-  cost_basis: string;
-  date: string;
-}
-
-type PageState = 'data' | 'empty' | 'sync';
-
-// ── Helpers ────────────────────────────────────────────────────────────
-
-function fmtDollar(n: number): string {
-  if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-  if (Math.abs(n) >= 1_000) return `$${(n / 1_000).toFixed(1)}K`;
-  return `$${n.toLocaleString()}`;
-}
-
-// fmtPct imported from ../utils/formatFinancials
-
-function trendArrow(trend?: string): string {
-  if (trend === 'down') return ' \u2198';    // ↘
-  if (trend === 'falling') return ' \u2193';  // ↓
-  return '';
-}
-
-function assumptionIcon(status: string) {
-  if (status === 'ok') return <span style={{ color: 'var(--positive)' }}>{'\u2713'}</span>;
-  if (status === 'warning') return <span style={{ color: 'var(--warning)' }}>{'\u25CF'}</span>;
-  return <span style={{ color: 'var(--negative)' }}>{'\u2717'}</span>;
-}
-
-function assumptionColor(status: string) {
-  if (status === 'ok') return 'var(--positive)';
-  if (status === 'warning') return 'var(--warning)';
-  return 'var(--negative)';
-}
-
-// ── Position Editor Popup ──────────────────────────────────────────────
-
-function PositionEditor({
-  holdings,
-  hasStrategy,
-  initialCash,
-  onClose,
-}: {
-  holdings: Holding[];
-  hasStrategy: boolean;
-  initialCash?: number | null;
-  onClose: () => void;
-}) {
-  const queryClient = useQueryClient();
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [cash, setCash] = useState<string>(initialCash != null ? initialCash.toFixed(2) : '');
-
-  const [rows, setRows] = useState<EditorRow[]>(() => {
-    // Expand holdings into individual lots (one row per lot)
-    const existing: EditorRow[] = [];
-    for (const h of holdings) {
-      if (h.lots && h.lots.length > 0) {
-        // Show each lot as a separate row
-        for (const lot of h.lots) {
-          existing.push({
-            ticker: h.ticker,
-            shares: String(lot.shares ?? ''),
-            cost_basis: (lot.cost_basis ?? 0).toFixed(2),
-            date: lot.date ?? '',
-          });
-        }
-      } else {
-        // No lots — show as single row
-        existing.push({
-          ticker: h.ticker,
-          shares: String(h.shares ?? ''),
-          cost_basis: h.cost_basis?.toFixed(2) ?? '',
-          date: h.buy_date ?? '',
-        });
-      }
-    }
-    existing.push({ ticker: '', shares: '', cost_basis: '', date: '' });
-    return existing;
+function AnalyticsSection() {
+  const [range, setRange] = useState('1y');
+  const { data, isPending } = useQuery({
+    queryKey: ['portfolio-analytics', range],
+    queryFn: () => getPortfolioAnalytics(range),
+    retry: 1,
   });
+  if (isPending) return <div className="empty-note">Computing analytics…</div>;
+  if (!data) return null;
+  const perf = data.performance;
+  const merged = perf.portfolio_series.map((p) => ({
+    date: p.date,
+    portfolio: p.indexed,
+    benchmark: perf.benchmark_series.find((b) => b.date === p.date)?.indexed,
+  }));
+  const exp = data.exposure;
+  const risk = data.risk;
 
-  const updateRow = useCallback(
-    (idx: number, field: keyof EditorRow, value: string) => {
-      setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, [field]: value } : r)));
-    },
-    [],
-  );
-
-  const removeRow = useCallback((idx: number) => {
-    setRows((prev) => prev.filter((_, i) => i !== idx));
-  }, []);
-
-  const addRow = useCallback(() => {
-    setRows((prev) => [...prev, { ticker: '', shares: '', cost_basis: '', date: '' }]);
-  }, []);
-
-  const handleSave = useCallback(async () => {
-    const positions = rows
-      .filter(r => r.ticker && parseFloat(r.shares) > 0)
-      .map(r => ({
-        ticker: r.ticker.trim().toUpperCase(),
-        shares: parseFloat(r.shares),
-        cost_basis: parseFloat(r.cost_basis) || 0,
-        date: r.date || undefined,
-      }));
-    if (positions.length === 0 && !cash) { onClose(); return; }
-    setSaveStatus('saving');
-    try {
-      const cashValue = cash ? parseFloat(cash) : undefined;
-      const result = await api.savePositions(positions, cashValue);
-      queryClient.invalidateQueries({ queryKey: ['portfolio'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-
-      // Warn about removed tickers (invalid, no price data)
-      if (result.removed_tickers?.length) {
-        const removed = result.removed_tickers.join(', ');
-        setSaveStatus('idle');
-        setRows(prev => {
-          const invalidSet = new Set(result.removed_tickers.map((t: string) => t.toUpperCase()));
-          return prev.filter(r => !invalidSet.has(r.ticker.toUpperCase()));
-        });
-        alert(`Removed invalid ticker(s): ${removed}\nNo price data found. Please check the ticker symbol and re-add.`);
-        return;
-      }
-
-      setSaveStatus('saved');
-      setTimeout(() => onClose(), 800);
-    } catch {
-      setSaveStatus('error');
+  // Plain-language read, composed from the same numbers shown below —
+  // every sentence is checkable against a KPI on this page.
+  const readBits: string[] = [];
+  if (perf.portfolio_return != null) {
+    let s = `${perf.portfolio_return >= 0 ? 'Up' : 'Down'} ${Math.abs(perf.portfolio_return * 100).toFixed(1)}% over the past ${range.toUpperCase()}`;
+    if (perf.benchmark_available && perf.excess_return != null) {
+      s += `, ${Math.abs(perf.excess_return * 100).toFixed(1)}pp ${perf.excess_return >= 0 ? 'ahead of' : 'behind'} the ${perf.benchmark_label}`;
     }
-  }, [rows, holdings, hasStrategy, queryClient, onClose]);
+    readBits.push(s + '.');
+  }
+  const flaggedSectors = exp.sectors.filter((s) => s.over_threshold);
+  if (exp.top_position_weight != null && (exp.flags?.length || flaggedSectors.length)) {
+    readBits.push(
+      `Concentration is the active risk: your largest position is ${(exp.top_position_weight * 100).toFixed(1)}% of the book${
+        flaggedSectors.length ? ` and ${flaggedSectors.map((s) => s.sector).join(', ')} ${flaggedSectors.length > 1 ? 'are' : 'is'} over the sector threshold` : ''
+      }.`,
+    );
+  }
+  const sortedPnl = [...data.contribution].sort((a, b) => b.total_pnl - a.total_pnl);
+  if (sortedPnl.length >= 2 && sortedPnl[0].total_pnl > 0) {
+    const top = sortedPnl[0];
+    const bottom = sortedPnl[sortedPnl.length - 1];
+    let s = `${top.ticker} has carried the book (${top.total_pnl >= 0 ? '+' : ''}$${Math.round(top.total_pnl).toLocaleString()})`;
+    if (bottom.total_pnl < 0) s += `; ${bottom.ticker} is the drag ($${Math.round(bottom.total_pnl).toLocaleString()})`;
+    readBits.push(s + '.');
+  }
+  if (data.decisions.events_measured > 0 && data.decisions.promoted_avg_return != null && data.decisions.dismissed_avg_return != null) {
+    readBits.push(
+      `Your promote calls have averaged ${fmtSignedPct(data.decisions.promoted_avg_return)} forward vs ${fmtSignedPct(data.decisions.dismissed_avg_return)} for dismissals (${data.decisions.events_measured} measured).`,
+    );
+  }
 
   return (
-    <div className="editor-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="editor-popup">
-        <div className="editor-popup-header">
-          <div>
-            <div style={{ fontFamily: 'var(--font-display)', fontSize: 'var(--text-lg)', fontWeight: 600 }}>
-              Edit Positions
-            </div>
-            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-              Add, edit, or remove positions. Click Save when done.
-            </div>
+    <div className="dash-section" style={{ marginBottom: 16 }}>
+      {readBits.length > 0 && (
+        <div
+          className="card askable"
+          style={{ marginBottom: 12, borderLeft: '3px solid var(--teal)', cursor: 'pointer' }}
+          title="Click to ask about this read"
+          onClick={(e) =>
+            ask(e, {
+              title: 'Portfolio read',
+              questions: [
+                'What is driving my performance vs the benchmark?',
+                'Which holdings drive my concentration risk?',
+                'How have my promote and dismiss decisions worked out?',
+              ],
+            })
+          }
+        >
+          <div className="card-title">
+            <span style={{ color: 'var(--teal)' }}>✦</span> The read
           </div>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            {saveStatus === 'error' && <span style={{ fontSize: 10, color: 'var(--negative)' }}>Save failed</span>}
-            {saveStatus === 'saved' && <span style={{ fontSize: 10, color: 'var(--positive)' }}>Saved!</span>}
-            <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-            <button className="btn btn-accent" onClick={handleSave} disabled={saveStatus === 'saving'}>
-              {saveStatus === 'saving' ? 'Saving...' : 'Save Changes'}
-            </button>
+          <div style={{ fontSize: 'var(--text-sm)', lineHeight: 1.65, color: 'var(--text-primary)' }}>
+            {readBits.join(' ')}
+          </div>
+          <div style={{ marginTop: 6, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+            Composed from the numbers below — click to question any of it.
           </div>
         </div>
-
-        <div className="editor-popup-body">
-          {/* Cash balance */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, padding: '8px 10px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius)' }}>
-            <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', fontWeight: 500, whiteSpace: 'nowrap' }}>Cash Balance</label>
-            <div style={{ position: 'relative', flex: '0 0 160px' }}>
-              <span style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>$</span>
-              <input
-                className="editor-input editor-input-num"
-                style={{ paddingLeft: 20, width: '100%' }}
-                value={cash}
-                placeholder="0.00"
-                onChange={(e) => setCash(e.target.value)}
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+        <div className="section-label" style={{ marginBottom: 0 }}>Analytics</div>
+        <div className="seg-control">
+          {['1m', '6m', '1y', '5y'].map((k) => (
+            <button key={k} className={`seg-option${range === k ? ' active' : ''}`} onClick={() => setRange(k)}>
+              {k.toUpperCase()}
+            </button>
+          ))}
+        </div>
+        <a className="btn btn-ghost" style={{ marginLeft: 'auto' }} href={exportUrls.portfolio}>
+          CSV
+        </a>
+      </div>
+      <div className="kpi-grid" style={{ marginBottom: 12 }}>
+        <div className="kpi-card">
+          <div className="kpi-label">Return ({range.toUpperCase()}, TWR)</div>
+          <div className="kpi-value num" style={{ textAlign: 'left', color: (perf.portfolio_return ?? 0) >= 0 ? 'var(--positive)' : 'var(--negative)' }}>
+            {fmtSignedPct(perf.portfolio_return)}
+          </div>
+          <div className="kpi-detail">{perf.benchmark_label} {fmtSignedPct(perf.benchmark_return)}</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">vs {perf.benchmark_label}</div>
+          <div className="kpi-value num" style={{ textAlign: 'left', color: (perf.excess_return ?? 0) >= 0 ? 'var(--positive)' : 'var(--negative)' }}>
+            {perf.excess_return == null ? '—' : `${perf.excess_return >= 0 ? '+' : ''}${(perf.excess_return * 100).toFixed(1)}pp`}
+          </div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">Max drawdown</div>
+          <div className="kpi-value num" style={{ textAlign: 'left' }}>{fmtSignedPct(risk.max_drawdown)}</div>
+          {risk.volatility != null && (
+            <div className="kpi-detail">volatility {(risk.volatility * 100).toFixed(0)}% ann.</div>
+          )}
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">Beta vs {perf.benchmark_label}</div>
+          <div className="kpi-value num" style={{ textAlign: 'left' }}>
+            {risk.beta != null ? risk.beta.toFixed(2) : '—'}
+          </div>
+          {risk.correlation != null && (
+            <div className="kpi-detail">correlation {risk.correlation.toFixed(2)}</div>
+          )}
+        </div>
+      </div>
+      {merged.length > 1 && (
+        <div className="card" style={{ padding: '12px 14px', marginBottom: 12 }}>
+          <div className="card-title">Performance vs {perf.benchmark_label} (indexed to 100)</div>
+          <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={merged} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
+              <XAxis dataKey="date" axisLine={false} tickLine={false} minTickGap={64}
+                     tick={{ fontSize: 10, fill: 'var(--text-muted)', fontFamily: 'var(--font-data)' }} />
+              <YAxis domain={['auto', 'auto']} width={44} orientation="right" axisLine={false} tickLine={false}
+                     tick={{ fontSize: 10, fill: 'var(--text-muted)', fontFamily: 'var(--font-data)' }} />
+              <ChartTooltip
+                contentStyle={{
+                  background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-data)', fontSize: 11,
+                }}
               />
+              <Line type="monotone" dataKey="portfolio" name="Portfolio" stroke="var(--accent)"
+                    strokeWidth={1.5} dot={false} isAnimationActive={false} />
+              <Line type="monotone" dataKey="benchmark" name={perf.benchmark_label} stroke="var(--text-muted)"
+                    strokeWidth={1.5} strokeDasharray="5 4" dot={false} isAnimationActive={false} />
+            </LineChart>
+          </ResponsiveContainer>
+          {perf.note && <div className="empty-note">{perf.note}</div>}
+        </div>
+      )}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
+        <div className="card" style={{ padding: '12px 14px' }}>
+          <div className="card-title">Contribution (pp of capital deployed)</div>
+          {data.contribution.length === 0 ? (
+            <div className="empty-note">No positions yet.</div>
+          ) : (
+            data.contribution.slice(0, 8).map((c) => (
+              <div key={c.ticker} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 'var(--text-sm)' }}>
+                <span style={{ fontFamily: 'var(--font-data)' }}>
+                  {c.ticker}
+                  {c.exited && (
+                    <span className="health-chip" title="Position fully sold — shown for realized P&L attribution, not a current holding." style={{ marginLeft: 6 }}>
+                      closed
+                    </span>
+                  )}
+                </span>
+                <span style={{ fontFamily: 'var(--font-data)', color: c.total_pnl >= 0 ? 'var(--positive)' : 'var(--negative)' }}>
+                  {c.contribution_pp == null ? fmtPnl(c.total_pnl) : `${c.contribution_pp >= 0 ? '+' : ''}${c.contribution_pp.toFixed(1)}pp`}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+        <div
+          className="card askable"
+          style={{ padding: '12px 14px' }}
+          title="Click to ask about exposure"
+          onClick={(e) =>
+            ask(e, {
+              title: 'Portfolio · sector exposure',
+              questions: [
+                'What would trimming my largest position to the policy line look like?',
+                'Why is my concentration flag set where it is?',
+                'Which holdings drive my sector concentration?',
+              ],
+            })
+          }
+        >
+          <div className="card-title">Sector exposure</div>
+          {exp.sectors.map((s) => (
+            <div key={s.sector} style={{ marginBottom: 6 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                <span>{s.sector}</span>
+                <span style={{ fontFamily: 'var(--font-data)' }}>{s.weight == null ? '—' : `${(s.weight * 100).toFixed(0)}%`}</span>
+              </div>
+              <div style={{ height: 5, background: 'var(--bg-elevated)', borderRadius: 3 }}>
+                <div style={{ width: `${(s.weight ?? 0) * 100}%`, height: 5, borderRadius: 3,
+                              background: s.over_threshold ? 'var(--warning)' : 'var(--accent-muted)' }} />
+              </div>
             </div>
-            <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-              Uninvested cash. Included in total portfolio value and weight calculations.
-            </span>
+          ))}
+          {(exp.flags ?? []).map((f, i) => (
+            <div key={i} style={{ marginTop: 6, fontSize: 'var(--text-xs)', color: 'var(--warning)' }}>
+              ⚠ {f}
+            </div>
+          ))}
+          {exp.top_position_weight != null && (
+            <div style={{ marginTop: 8, fontSize: 'var(--text-xs)', color: 'var(--text-muted)', fontFamily: 'var(--font-data)' }}>
+              top position {(exp.top_position_weight * 100).toFixed(0)}%{exp.top3_weight != null ? ` · top 3 ${(exp.top3_weight * 100).toFixed(0)}%` : ''}
+            </div>
+          )}
+        </div>
+        <div className="card" style={{ padding: '12px 14px' }}>
+          <div className="card-title">Factor tilts (percentile vs universe)</div>
+          {data.factor_tilts.every((f) => f.percentile == null) ? (
+            <div className="empty-note">Needs metric coverage across the universe.</div>
+          ) : (
+            data.factor_tilts.map((f) => (
+              <div key={f.factor} style={{ marginBottom: 6 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                  <span>{f.label}</span>
+                  <span style={{ fontFamily: 'var(--font-data)' }}>
+                    {f.percentile == null ? '—' : `p${f.percentile.toFixed(0)}`}
+                  </span>
+                </div>
+                <div style={{ height: 5, background: 'var(--bg-elevated)', borderRadius: 3, position: 'relative' }}>
+                  <div style={{ position: 'absolute', left: '50%', top: -1, width: 1, height: 7, background: 'var(--border-hover)' }} />
+                  <div style={{ width: `${f.percentile ?? 0}%`, height: 5, background: 'var(--accent-muted)', borderRadius: 3 }} />
+                </div>
+              </div>
+            ))
+          )}
+          <div style={{ marginTop: 6, fontSize: 10, fontFamily: 'var(--font-data)', color: 'var(--text-muted)' }}>
+            p50 = universe-typical · weighted by position size
           </div>
-
-          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginBottom: 8, padding: '6px 10px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius)' }}>
-            Multiple rows with the same ticker are treated as separate lots. Cost basis will be automatically averaged by share count.
-          </div>
-
-          {/* Editable table */}
-          <table>
-            <thead>
-              <tr>
-                <th style={{ width: 100 }}>Ticker</th>
-                <th className="num" style={{ width: 80 }}>Shares</th>
-                <th className="num" style={{ width: 100 }}>Cost Basis</th>
-                <th className="num" style={{ width: 110 }}>Date</th>
-                <th style={{ width: 40 }} />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, idx) => {
-                const isLast = idx === rows.length - 1 && !row.ticker;
-                return (
-                  <tr key={idx}>
-                    <td>
-                      <input
-                        className="editor-input editor-input-ticker"
-                        value={row.ticker}
-                        placeholder={isLast ? 'TICKER' : undefined}
-                        onChange={(e) => updateRow(idx, 'ticker', e.target.value.toUpperCase())}
-                      />
-                    </td>
-                    <td className="num">
-                      <input
-                        className="editor-input editor-input-num"
-                        value={row.shares}
-                        placeholder={isLast ? '0' : undefined}
-                        onChange={(e) => updateRow(idx, 'shares', e.target.value)}
-                      />
-                    </td>
-                    <td className="num">
-                      <input
-                        className="editor-input editor-input-num"
-                        style={{ width: 80 }}
-                        value={row.cost_basis}
-                        placeholder={isLast ? '0.00' : undefined}
-                        onChange={(e) => updateRow(idx, 'cost_basis', e.target.value)}
-                      />
-                    </td>
-                    <td className="num">
-                      <input
-                        type="date"
-                        className="editor-input"
-                        value={row.date}
-                        onChange={(e) => updateRow(idx, 'date', e.target.value)}
-                      />
-                    </td>
-                    <td style={{ textAlign: 'center' }}>
-                      {!(isLast) && (
-                        <button className="editor-remove" onClick={() => removeRow(idx)}>
-                          {'\u2715'}
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          <button
-            className="btn btn-ghost"
-            style={{ width: '100%', padding: 8, fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 8 }}
-            onClick={addRow}
-          >
-            + Add another position
-          </button>
-
-          <div style={{ marginTop: 12, fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.6 }}>
-            {hasStrategy
-              ? '✓ Strategy active — new positions will auto-run thesis research. Position type (core / tactical) is assigned by the Allocator after research completes.'
-              : 'No strategy set — only P&L will be tracked. Set up your strategy in Chat to enable thesis tracking and health scores.'}
+        </div>
+        <div className="card" style={{ padding: '12px 14px' }}>
+          <div className="card-title">Decision attribution</div>
+          {data.decisions.events_measured === 0 ? (
+            <div className="empty-note">
+              Fills as promote/dismiss choices age past {data.decisions.min_age_days} days.
+            </div>
+          ) : (
+            <>
+              <div style={{ display: 'flex', gap: 16, marginBottom: 8 }}>
+                <div>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Promoted · fwd return</div>
+                  <div className="num" style={{ fontSize: 'var(--text-lg)', color: (data.decisions.promoted_avg_return ?? 0) >= 0 ? 'var(--positive)' : 'var(--negative)' }}>
+                    {fmtSignedPct(data.decisions.promoted_avg_return)}
+                  </div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>Dismissed · fwd return</div>
+                  <div className="num" style={{ fontSize: 'var(--text-lg)' }}>
+                    {fmtSignedPct(data.decisions.dismissed_avg_return)}
+                  </div>
+                </div>
+              </div>
+              {data.decisions.recent.slice(0, 5).map((d, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--text-xs)', padding: '2px 0', color: 'var(--text-secondary)' }}>
+                  <span style={{ fontFamily: 'var(--font-data)' }}>{d.ticker} · {d.action}</span>
+                  <span style={{ fontFamily: 'var(--font-data)', color: d.forward_return >= 0 ? 'var(--positive)' : 'var(--negative)' }}>
+                    {fmtSignedPct(d.forward_return)} / {d.days}d
+                  </span>
+                </div>
+              ))}
+            </>
+          )}
+          <div style={{ marginTop: 6, fontSize: 10, fontFamily: 'var(--font-data)', color: 'var(--text-muted)' }}>
+            {data.decisions.note}
           </div>
         </div>
       </div>
@@ -326,526 +308,503 @@ function PositionEditor({
   );
 }
 
-// ── Sync Panel ─────────────────────────────────────────────────────────
+const COLS = 11;
 
-function SyncPanel({ onOpenEditor, hasStrategy }: { onOpenEditor: () => void; hasStrategy: boolean }) {
+const POSITION_TYPES = ['core', 'tactical', 'starter', 'hedge', 'legacy'];
+
+async function setPositionType(ticker: string, positionType: string | null): Promise<void> {
+  const res = await fetch('/api/portfolio/position-type', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ticker, position_type: positionType }),
+  });
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (typeof body?.detail === 'string') detail = body.detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+}
+
+/* ── small render helpers ── */
+
+function weightLabel(w: number | null | undefined): string {
+  if (w == null || Number.isNaN(w)) return '—';
+  return Math.abs(w) <= 1 ? pct(w) : fmtPct(w, 1).replace('+', '');
+}
+
+function HealthChip({ label }: { label?: string | null }) {
+  if (!label) return <span className="muted">—</span>;
+  const cls =
+    label === 'Intact' ? 'health-chip intact' : label === 'Watching' ? 'health-chip watching' : label === 'Broken' ? 'health-chip broken' : 'health-chip';
+  return <span className={cls}>{label}</span>;
+}
+
+function CoverageChip({ state }: { state?: string | null }) {
+  const title = 'FundOps keeps memo-backed thesis coverage for holdings.';
+  if (!state || state === 'none') return <span className="health-chip" title={title}>no coverage</span>;
+  if (state === 'covered') return <span className="health-chip intact" title={title}>covered</span>;
+  if (state === 'stale') return <span className="health-chip watching" title={`${title} Coverage memo is older than 90 days.`}>stale</span>;
+  if (state === 'failed') {
+    return (
+      <span className="opfail-tag" title={`${title} The coverage run hit an operational error — it will retry.`}>
+        coverage failed
+      </span>
+    );
+  }
+  if (state === 'running') {
+    return (
+      <span className="pulse-text" style={{ fontSize: 'var(--text-xs)' }} title={title}>
+        <span className="pulse-dot" />
+        running
+      </span>
+    );
+  }
+  return <span className="health-chip" title={title}>{state}</span>;
+}
+
+/* ── lots / sales expansion ── */
+
+function asNum(v: unknown): number | null {
+  return typeof v === 'number' && !Number.isNaN(v) ? v : null;
+}
+function asStr(v: unknown): string | null {
+  return typeof v === 'string' && v ? v : null;
+}
+
+function HoldingDetail({
+  ticker,
+  onFixLot,
+}: {
+  ticker: string;
+  onFixLot: (lot: { id: string; shares: number | null; cost_basis: number | null; purchase_date: string | null }) => void;
+}) {
+  const { data, isPending } = useQuery({
+    queryKey: ['ledger', ticker],
+    queryFn: () => getLedger(ticker),
+  });
+
+  if (isPending) return <div className="muted" style={{ fontSize: 'var(--text-xs)' }}>Loading ledger…</div>;
+
+  const lots = (data?.lots ?? []).map((r) => ({
+    id: asStr(r.id) ?? String(r.id ?? r.lot_id ?? ''),
+    shares: asNum(r.shares),
+    cost_basis: asNum(r.cost_basis),
+    purchase_date: asStr(r.purchase_date) ?? asStr(r.date),
+    corrected: r.corrected_by != null,
+  }));
+  const sales = (data?.sales ?? []).map((r, i) => ({
+    id: asStr(r.id) ?? String(r.id ?? i),
+    shares: asNum(r.shares),
+    price: asNum(r.price),
+    sale_date: asStr(r.sale_date) ?? asStr(r.date),
+    realized_pnl: asNum(r.realized_pnl),
+  }));
+
   return (
-    <>
-      <PageHeader
-        sectionLabel="Portfolio"
-        title="Sync Positions"
-        subtitle="Add your holdings to track P&L, thesis health, and allocation."
-      />
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 8 }}>
+      <div className="expanded-card">
+        <div className="expanded-card-title">Lots ({lots.length})</div>
+        {lots.length === 0 ? (
+          <div className="muted" style={{ fontSize: 'var(--text-xs)' }}>No open lots.</div>
+        ) : (
+          lots.map((lot) => (
+            <div key={lot.id} className="alert-row" style={{ fontFamily: 'var(--font-data)', fontSize: 'var(--text-xs)' }}>
+              <span style={{ width: 100, flexShrink: 0, color: 'var(--text-secondary)' }}>{fmtDate(lot.purchase_date)}</span>
+              <span>
+                {fmtShares(lot.shares)} @ {fmtPrice(lot.cost_basis)}
+              </span>
+              {lot.corrected && <span className="badge badge-muted">corrected</span>}
+              <button
+                className="btn btn-ghost"
+                style={{ marginLeft: 'auto', padding: '2px 8px', fontSize: 10 }}
+                onClick={() => onFixLot(lot)}
+                title="Data correction — not a trade"
+              >
+                fix entry
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+      <div className="expanded-card">
+        <div className="expanded-card-title">Sales ({sales.length})</div>
+        {sales.length === 0 ? (
+          <div className="muted" style={{ fontSize: 'var(--text-xs)' }}>No sales recorded.</div>
+        ) : (
+          sales.map((s) => (
+            <div key={s.id} className="alert-row" style={{ fontFamily: 'var(--font-data)', fontSize: 'var(--text-xs)' }}>
+              <span style={{ width: 100, flexShrink: 0, color: 'var(--text-secondary)' }}>{fmtDate(s.sale_date)}</span>
+              <span>
+                {fmtShares(s.shares)} @ {fmtPrice(s.price)}
+              </span>
+              <span
+                style={{ marginLeft: 'auto', color: s.realized_pnl == null ? undefined : s.realized_pnl >= 0 ? 'var(--positive)' : 'var(--negative)' }}
+              >
+                {fmtPnl(s.realized_pnl)}
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
 
-      <div style={{ display: 'flex', justifyContent: 'center', marginTop: 24 }}>
-        <div className="sync-card" style={{ maxWidth: 400, textAlign: 'center' }}>
-          <div style={{ fontSize: 'var(--text-lg)', marginBottom: 8 }}>{'\u270E'}</div>
-          <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 4 }}>Add Positions</div>
-          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: 10 }}>
-            Enter ticker, shares, cost basis, and purchase date. Multiple purchases of the same stock are tracked as separate lots and automatically combined.
+/* ── entry forms ── */
+
+interface EntryDraft {
+  ticker: string;
+  shares: string;
+  price: string;
+  date: string;
+}
+
+const emptyDraft = (): EntryDraft => ({ ticker: '', shares: '', price: '', date: localToday() });
+
+function EntryForm({
+  kind,
+  onClose,
+}: {
+  kind: 'purchase' | 'sale';
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [draft, setDraft] = useState<EntryDraft>(emptyDraft);
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const ticker = draft.ticker.trim().toUpperCase();
+      const shares = Number(draft.shares);
+      const price = Number(draft.price);
+      if (!ticker || !Number.isFinite(shares) || shares <= 0 || !Number.isFinite(price) || price <= 0 || !draft.date) {
+        throw new Error('Ticker, positive shares, a positive price and a date are required.');
+      }
+      if (kind === 'purchase') {
+        return addLot({ ticker, shares, cost_basis: price, purchase_date: draft.date });
+      }
+      return recordSale({ ticker, shares, price, sale_date: draft.date });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['portfolio'] });
+      qc.invalidateQueries({ queryKey: ['ledger'] });
+      onClose();
+    },
+  });
+
+  const set = (k: keyof EntryDraft) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setDraft((d) => ({ ...d, [k]: e.target.value }));
+
+  return (
+    <div className="card" style={{ marginBottom: 12 }}>
+      <div className="card-title">{kind === 'purchase' ? 'Record purchase' : 'Record sale'}</div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input className="editor-input editor-input-ticker" placeholder="TICKER" value={draft.ticker} onChange={set('ticker')} aria-label="Ticker" />
+        <input className="editor-input editor-input-num" placeholder="Shares" value={draft.shares} onChange={set('shares')} aria-label="Shares" />
+        <input
+          className="editor-input editor-input-num"
+          placeholder={kind === 'purchase' ? 'Cost/share' : 'Price'}
+          value={draft.price}
+          onChange={set('price')}
+          aria-label={kind === 'purchase' ? 'Cost per share' : 'Sale price'}
+        />
+        <input className="editor-input" type="date" value={draft.date} onChange={set('date')} aria-label="Date" />
+        <button className="btn btn-accent" style={{ padding: '5px 14px', fontSize: 'var(--text-xs)' }} disabled={mutation.isPending} onClick={() => mutation.mutate()}>
+          {mutation.isPending ? 'Recording…' : kind === 'purchase' ? 'Record purchase' : 'Record sale'}
+        </button>
+        <button className="btn btn-ghost" style={{ padding: '5px 10px', fontSize: 'var(--text-xs)' }} onClick={onClose}>
+          Cancel
+        </button>
+      </div>
+      {mutation.isError && (
+        <div className="banner banner-warning" style={{ marginTop: 10 }}>
+          {(mutation.error as Error).message}
+          <div className="muted" style={{ fontSize: 'var(--text-xs)', marginTop: 4 }}>
+            Check shares/price/date and try again. If you are correcting an already-recorded entry rather than recording a trade, use “fix entry” on the lot instead.
           </div>
-          <button className="btn btn-accent" style={{ width: '100%' }} onClick={onOpenEditor}>
-            Open Editor
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── lot correction modal ── */
+
+function FixLotModal({
+  lot,
+  onClose,
+}: {
+  lot: { id: string; shares: number | null; cost_basis: number | null; purchase_date: string | null };
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [shares, setShares] = useState(lot.shares != null ? String(lot.shares) : '');
+  const [cost, setCost] = useState(lot.cost_basis != null ? String(lot.cost_basis) : '');
+  const [date, setDate] = useState(lot.purchase_date ?? '');
+  const [remove, setRemove] = useState(false);
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      correctLot(lot.id, {
+        ...(remove
+          ? { remove: true }
+          : {
+              ...(shares !== '' ? { shares: Number(shares) } : {}),
+              ...(cost !== '' ? { cost_basis: Number(cost) } : {}),
+              ...(date !== '' ? { purchase_date: date } : {}),
+            }),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['portfolio'] });
+      qc.invalidateQueries({ queryKey: ['ledger'] });
+      onClose();
+    },
+  });
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="card-title">Fix entry — data correction, not a trade</div>
+        <div className="muted" style={{ fontSize: 'var(--text-xs)', marginBottom: 12 }}>
+          Corrections rewrite this lot record; they never count as buys or sells.
+        </div>
+        <div className="stack">
+          <label style={{ fontSize: 'var(--text-xs)' }}>
+            Shares
+            <input className="field" style={{ marginTop: 4 }} value={shares} onChange={(e) => setShares(e.target.value)} disabled={remove} />
+          </label>
+          <label style={{ fontSize: 'var(--text-xs)' }}>
+            Cost / share
+            <input className="field" style={{ marginTop: 4 }} value={cost} onChange={(e) => setCost(e.target.value)} disabled={remove} />
+          </label>
+          <label style={{ fontSize: 'var(--text-xs)' }}>
+            Purchase date
+            <input className="field" type="date" style={{ marginTop: 4 }} value={date} onChange={(e) => setDate(e.target.value)} disabled={remove} />
+          </label>
+          <label style={{ fontSize: 'var(--text-xs)', display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input type="checkbox" checked={remove} onChange={(e) => setRemove(e.target.checked)} />
+            Remove this lot (entered in error)
+          </label>
+          {mutation.isError && <div className="banner banner-warning">{(mutation.error as Error).message}</div>}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button className="btn btn-ghost" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="btn btn-accent" disabled={mutation.isPending} onClick={() => mutation.mutate()}>
+              {mutation.isPending ? 'Saving…' : 'Apply correction'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── page ── */
+
+export default function Portfolio() {
+  const qc = useQueryClient();
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [entryForm, setEntryForm] = useState<'purchase' | 'sale' | null>(null);
+  const [fixLot, setFixLot] = useState<{ id: string; shares: number | null; cost_basis: number | null; purchase_date: string | null } | null>(null);
+
+  const { data, isPending, isError, error } = useQuery({ queryKey: ['portfolio'], queryFn: getPortfolio });
+
+  const refresh = useMutation({
+    mutationFn: refreshPortfolio,
+    onSettled: () => qc.invalidateQueries({ queryKey: ['portfolio'] }),
+  });
+
+  const typeMutation = useMutation({
+    mutationFn: ({ ticker, positionType }: { ticker: string; positionType: string | null }) => setPositionType(ticker, positionType),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['portfolio'] }),
+  });
+
+  const holdings = data?.holdings ?? [];
+  const totals = data?.totals;
+
+  const renderRow = (h: HoldingRow) => {
+    const isOpen = expanded === h.ticker;
+    const rows = [
+      <tr key={h.ticker} className="stage-row" onClick={() => setExpanded(isOpen ? null : h.ticker)}>
+        <td>
+          <TickerLink ticker={h.ticker} />
+        </td>
+        <td className="num">{fmtShares(h.shares)}</td>
+        <td className="num">{fmtPrice(h.avg_cost)}</td>
+        <td className="num">
+          {h.price == null ? (
+            <span
+              className="muted"
+              title="No retained market data for this ticker yet — it's an unknown or manually-entered symbol. Coverage will try to fetch a price and financials."
+            >
+              unpriced
+            </span>
+          ) : (
+            fmtPrice(h.price)
+          )}
+        </td>
+        <td className="num">{fmtUsdCompact(h.market_value)}</td>
+        <td className="num" style={{ color: h.unrealized_pnl == null ? undefined : h.unrealized_pnl >= 0 ? 'var(--positive)' : 'var(--negative)' }}>
+          {fmtPnl(h.unrealized_pnl)}
+        </td>
+        <td className="num">{weightLabel(h.weight)}</td>
+        <td onClick={(e) => e.stopPropagation()}>
+          <select
+            className="editor-select"
+            value={h.position_type ?? ''}
+            disabled={typeMutation.isPending}
+            onChange={(e) => typeMutation.mutate({ ticker: h.ticker, positionType: e.target.value || null })}
+            aria-label={`Position type for ${h.ticker}`}
+          >
+            <option value="">—</option>
+            {POSITION_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </td>
+        <td>
+          <HealthChip label={h.thesis_health_label} />
+        </td>
+        <td>
+          <CoverageChip state={h.coverage_state} />
+        </td>
+        <td>
+          <span className="pill-row">
+            {(h.flags ?? []).map((f, i) => (
+              <span key={`${f.kind}-${i}`} className="tag-amber" title={f.kind.replace(/_/g, ' ')}>
+                {f.detail || f.kind.replace(/_/g, ' ')}
+              </span>
+            ))}
+          </span>
+        </td>
+      </tr>,
+    ];
+    if (isOpen) {
+      rows.push(
+        <tr key={`${h.ticker}-detail`}>
+          <td colSpan={COLS} className="expanded-area" style={{ cursor: 'default' }}>
+            <HoldingDetail ticker={h.ticker} onFixLot={setFixLot} />
+          </td>
+        </tr>,
+      );
+    }
+    return rows;
+  };
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div className="page-kicker">Portfolio</div>
+          <h1 className="page-title">Holdings</h1>
+          <div className="page-subtitle">Ledger-backed positions with memo-backed thesis coverage.</div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <button className="btn" onClick={() => setEntryForm(entryForm === 'purchase' ? null : 'purchase')}>
+            Record purchase
+          </button>
+          <button className="btn" onClick={() => setEntryForm(entryForm === 'sale' ? null : 'sale')}>
+            Record sale
+          </button>
+          <button
+            className="btn"
+            disabled={refresh.isPending}
+            onClick={() => refresh.mutate()}
+            title="Updates prices and P&L only — never thesis health or your entered records."
+          >
+            {refresh.isPending ? 'Refreshing…' : 'Refresh prices'}
           </button>
         </div>
       </div>
 
-      <div style={{ marginTop: 12, fontSize: 'var(--text-xs)', color: 'var(--text-muted)', textAlign: 'center' }}>
-        FundOps does not connect to brokerages. You execute trades externally and sync your positions here.
-        {hasStrategy && (
-          <span style={{ color: 'var(--positive)', marginLeft: 6 }}>
-            ✓ Strategy active — thesis will auto-run on new positions.
-          </span>
-        )}
-        {!hasStrategy && (
-          <span style={{ color: 'var(--accent)', marginLeft: 6 }}>
-            <Link to="/" style={{ color: 'var(--accent)' }}>Set up your strategy</Link> to enable thesis tracking.
-          </span>
-        )}
-      </div>
-    </>
-  );
-}
-
-// ── Empty State ────────────────────────────────────────────────────────
-
-function EmptyState({ onSync }: { onSync: () => void }) {
-  return (
-    <>
-      <PageHeader sectionLabel="Portfolio" title="Held Positions" />
-      <div className="card" style={{ textAlign: 'center', padding: 40 }}>
-        <div style={{ fontSize: 'var(--text-lg)', fontWeight: 500, marginBottom: 6 }}>
-          Add your portfolio
+      <div className="kpi-grid" style={{ marginBottom: 14 }}>
+        <div className="kpi-card">
+          <div className="kpi-label">Total Value</div>
+          <div className="kpi-value num" style={{ textAlign: 'left' }}>{fmtUsdCompact(totals?.market_value)}</div>
+          <div className="kpi-detail">cost basis {fmtUsdCompact(totals?.cost_basis)}</div>
         </div>
-        <div style={{
-          fontSize: 'var(--text-sm)', color: 'var(--text-secondary)',
-          marginBottom: 16, maxWidth: 420, marginLeft: 'auto', marginRight: 'auto',
-        }}>
-          Import your positions so FundOps can track P&amp;L, monitor thesis health, and recommend
-          allocator actions. FundOps does not connect to brokers. You execute trades externally and sync back.
+        <div className="kpi-card">
+          <div className="kpi-label">Unrealized P&L</div>
+          <div
+            className="kpi-value num"
+            style={{ textAlign: 'left', color: totals?.unrealized_pnl == null ? undefined : totals.unrealized_pnl >= 0 ? 'var(--positive)' : 'var(--negative)' }}
+          >
+            {fmtPnl(totals?.unrealized_pnl)}
+          </div>
         </div>
-        <button className="btn btn-accent" style={{ padding: '10px 24px', fontSize: 'var(--text-sm)' }} onClick={onSync}>
-          Sync Positions
-        </button>
+        <div className="kpi-card">
+          <div className="kpi-label">Realized P&L</div>
+          <div
+            className="kpi-value num"
+            style={{ textAlign: 'left', color: totals?.realized_pnl == null ? undefined : totals.realized_pnl >= 0 ? 'var(--positive)' : 'var(--negative)' }}
+          >
+            {fmtPnl(totals?.realized_pnl)}
+          </div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-label">Positions</div>
+          <div className="kpi-value num" style={{ textAlign: 'left' }}>{totals?.positions ?? holdings.length}</div>
+        </div>
       </div>
-    </>
-  );
-}
 
-// ── Holding Row (expanded content) ─────────────────────────────────────
+      {holdings.length > 0 && <AnalyticsSection />}
 
-function HoldingExpandedContent({ h, hasStrategy }: { h: Holding; hasStrategy: boolean }) {
-  return (
-    <>
-      {/* Card 0: Purchase Lots */}
-      {h.lots && h.lots.length > 1 && (
-        <div className="expanded-card">
-          <div className="expanded-card-title">Purchase History ({h.lots.length} lots)</div>
-          <table style={{ width: '100%', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-data)', borderCollapse: 'collapse' }}>
+      {entryForm && <EntryForm kind={entryForm} onClose={() => setEntryForm(null)} />}
+      {refresh.isError && (
+        <div className="banner banner-warning" style={{ marginBottom: 12 }}>
+          Price refresh failed: {(refresh.error as Error).message}
+        </div>
+      )}
+      {typeMutation.isError && (
+        <div className="banner banner-warning" style={{ marginBottom: 12 }}>
+          Could not save position type: {(typeMutation.error as Error).message}
+        </div>
+      )}
+
+      {isPending ? (
+        <div className="stage-empty">Loading holdings…</div>
+      ) : isError ? (
+        <div className="stage-empty">Holdings unavailable: {(error as Error).message}</div>
+      ) : holdings.length === 0 ? (
+        <div className="stage-empty">
+          No holdings recorded. Use “Record purchase” to add your first lot — held tickers get memo-backed thesis coverage automatically.
+        </div>
+      ) : (
+        <div className="table-shell">
+          <table>
             <thead>
-              <tr style={{ color: 'var(--text-muted)' }}>
-                <th style={{ textAlign: 'left', padding: '2px 0', fontWeight: 500 }}>Date</th>
-                <th style={{ textAlign: 'right', padding: '2px 0', fontWeight: 500 }}>Shares</th>
-                <th style={{ textAlign: 'right', padding: '2px 0', fontWeight: 500 }}>Cost/Share</th>
-                <th style={{ textAlign: 'right', padding: '2px 0', fontWeight: 500 }}>Total Cost</th>
+              <tr>
+                <th style={{ width: 80 }}>Ticker</th>
+                <th className="num" style={{ width: 80 }}>Shares</th>
+                <th className="num" style={{ width: 90 }}>Avg Cost</th>
+                <th className="num" style={{ width: 90 }}>Price</th>
+                <th className="num" style={{ width: 100 }}>Mkt Value</th>
+                <th className="num" style={{ width: 110 }}>Unreal P&L</th>
+                <th className="num" style={{ width: 80 }}>Weight</th>
+                <th style={{ width: 100 }}>Type</th>
+                <th style={{ width: 100 }}>Thesis Health</th>
+                <th style={{ width: 110 }}>Coverage</th>
+                <th>Flags</th>
               </tr>
             </thead>
-            <tbody>
-              {h.lots.map((lot, i) => (
-                <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                  <td style={{ padding: '3px 0' }}>{lot.date || 'N/A'}</td>
-                  <td style={{ padding: '3px 0', textAlign: 'right' }}>{lot.shares.toLocaleString()}</td>
-                  <td style={{ padding: '3px 0', textAlign: 'right' }}>${lot.cost_basis.toFixed(2)}</td>
-                  <td style={{ padding: '3px 0', textAlign: 'right' }}>${(lot.shares * lot.cost_basis).toLocaleString()}</td>
-                </tr>
-              ))}
-              <tr style={{ fontWeight: 600 }}>
-                <td style={{ padding: '3px 0' }}>Total</td>
-                <td style={{ padding: '3px 0', textAlign: 'right' }}>{(h.shares ?? 0).toLocaleString()}</td>
-                <td style={{ padding: '3px 0', textAlign: 'right' }}>${(h.cost_basis ?? 0).toFixed(2)} avg</td>
-                <td style={{ padding: '3px 0', textAlign: 'right' }}>${((h.shares ?? 0) * (h.cost_basis ?? 0)).toLocaleString()}</td>
-              </tr>
-            </tbody>
+            <tbody>{holdings.flatMap(renderRow)}</tbody>
           </table>
         </div>
       )}
 
-      {/* Card 1: Thesis */}
-      <div className="expanded-card">
-        <div className="expanded-card-title">Thesis</div>
-        <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.6, marginBottom: 8 }}>
-          {h.thesis_synopsis || (hasStrategy ? 'Thesis pending — will populate after next run.' : 'Set up your strategy to enable thesis tracking.')}
-        </div>
-        <div style={{ fontSize: 'var(--text-xs)', fontFamily: 'var(--font-data)', color: 'var(--text-muted)' }}>
-          {h.buy_date && <>Bought {h.buy_date}</>}
-          {h.lots && h.lots.length > 1 && <>{h.lots.length} lots</>}
-          {h.fair_value != null && <> {'\u00B7'} FV ${h.fair_value}</>}
-          {h.conviction != null && <> {'\u00B7'} IC conviction {h.conviction}/5</>}
-        </div>
+      <div className="inline-metadata" style={{ marginTop: 10 }}>
+        <span>Price refresh is market-data only — it never re-judges thesis health.</span>
+        <span>Coverage: FundOps keeps memo-backed thesis coverage for holdings.</span>
       </div>
 
-      {/* Card 2: Key Assumptions */}
-      <div className="expanded-card">
-        <div className="expanded-card-title">Key Assumptions</div>
-        {!hasStrategy ? (
-          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-            Requires strategy — <Link to="/" style={{ color: 'var(--accent)' }}>set up strategy</Link>
-          </div>
-        ) : h.assumptions && h.assumptions.length > 0 ? (
-          <div style={{ fontSize: 'var(--text-xs)' }}>
-            {h.assumptions.map((a, i) => (
-              <div
-                key={i}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0',
-                  borderBottom: i < h.assumptions!.length - 1 ? '1px solid var(--border)' : undefined,
-                }}
-              >
-                {assumptionIcon(a.status)}
-                <span style={{ flex: 1, color: 'var(--text-secondary)' }}>{a.text}</span>
-                {a.score != null && (
-                  <span style={{ fontFamily: 'var(--font-data)', color: assumptionColor(a.status) }}>
-                    {a.score}/100
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>Pending — will populate after thesis run.</div>
-        )}
-        {h.recent_event && (
-          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 8 }}>
-            Recent: {h.recent_event}
-          </div>
-        )}
-      </div>
-
-      {/* Thesis Health */}
-      {h.thesis_health && h.thesis_health.length > 0 && (
-        <div className="expanded-card">
-          <div style={{ fontFamily: 'var(--font-data)', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>THESIS HEALTH</div>
-          <ThesisHealthBar assumptions={h.thesis_health as any} />
-        </div>
-      )}
-
-      {/* Thesis Events (weekly web monitoring) */}
-      {h.thesis_events && h.thesis_events.length > 0 && (
-        <div className="expanded-card">
-          <div style={{ fontFamily: 'var(--font-data)', fontSize: 'var(--text-xs)', color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>RECENT THESIS EVENTS</div>
-          {h.thesis_events.map((evt: any, i: number) => (
-            <div key={i} style={{ fontSize: 'var(--text-xs)', padding: '4px 0', borderBottom: '1px solid var(--border)' }}>
-              <span style={{ color: evt.status === 'breach' ? 'var(--negative)' : 'var(--text-secondary)' }}>
-                {evt.status === 'breach' ? '\u2717' : '\u2713'} {evt.assumption}
-              </span>
-              {evt.finding && <div style={{ color: 'var(--text-muted)', marginTop: 2, fontSize: 10 }}>{evt.finding.slice(0, 120)}...</div>}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* View full detail link */}
-      <div style={{ gridColumn: '1 / -1', display: 'flex', justifyContent: 'flex-end', marginTop: 2 }}>
-        <Link to={`/ticker/${h.ticker}`} className="ticker" style={{ fontSize: 'var(--text-xs)' }}>
-          View full detail {'\u2192'}
-        </Link>
-      </div>
-    </>
-  );
-}
-
-// ── Main Component ─────────────────────────────────────────────────────
-
-export function Portfolio() {
-  const queryClient = useQueryClient();
-
-  const { data, isLoading } = useQuery<PortfolioData>({
-    queryKey: ['portfolio'],
-    queryFn: api.portfolioStatus,
-  });
-
-  const { data: strategyData } = useQuery({
-    queryKey: ['strategy'],
-    queryFn: api.getStrategy,
-  });
-
-  const hasStrategy = !!(strategyData?.strategy?.id || strategyData?.strategy_profile);
-
-  const refreshMutation = useMutation({
-    mutationFn: api.runPortfolio,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['portfolio'] }),
-  });
-
-  const holdings = data?.holdings ?? [];
-  const alerts = data?.alerts ?? [];
-  const totalValue = data?.total_value ?? 0;
-  const totalPnlPct = data?.total_pnl_pct ?? 0;
-  const dailyChange = data?.daily_change ?? 0;
-  const avgHealth = data?.avg_health ?? 0;
-  const posBreakdown = data?.position_breakdown ?? '';
-
-  // Positions with no thesis yet (health_score === 0 or undefined, no thesis_synopsis)
-  const [pageState, setPageState] = useState<PageState>('data');
-  const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
-  const [showEditor, setShowEditor] = useState(false);
-  const [memoRunning, setMemoRunning] = useState(false);
-  const [memoStatus, setMemoStatus] = useState<string | null>(null);
-
-  const runMemosSequentially = async () => {
-    const tickers = holdings.map(h => h.ticker);
-    if (tickers.length === 0) return;
-    setMemoRunning(true);
-    let completed = 0;
-    let failed = 0;
-    for (const ticker of tickers) {
-      // Research report first, then investment memo
-      setMemoStatus(`Research report ${completed + 1}/${tickers.length}: ${ticker}...`);
-      try {
-        await api.generateResearchReport(ticker);
-      } catch {
-        failed++;
-      }
-      setMemoStatus(`Investment memo ${completed + 1}/${tickers.length}: ${ticker}...`);
-      try {
-        await api.generateInvestmentMemo(ticker);
-      } catch {
-        failed++;
-      }
-      completed++;
-    }
-    queryClient.invalidateQueries({ queryKey: ['portfolio'] });
-    setMemoStatus(
-      `Done: ${completed} ticker${completed !== 1 ? 's' : ''} (both memo types)${failed ? `, ${failed} failed` : ''}.`
-    );
-    setMemoRunning(false);
-  };
-
-  // Derive page state from data
-  const effectiveState = !isLoading && holdings.length === 0 && pageState === 'data' ? 'empty' : pageState;
-
-  const toggleExpand = useCallback((ticker: string) => {
-    setExpandedTicker((prev) => (prev === ticker ? null : ticker));
-  }, []);
-
-  // ── Render ─────────────────────────────────────────────────────────
-
-  return (
-    <div className="stack">
-      {/* Sync panel state */}
-      {effectiveState === 'sync' && (
-        <SyncPanel onOpenEditor={() => setShowEditor(true)} hasStrategy={hasStrategy} />
-      )}
-
-      {/* Empty state */}
-      {effectiveState === 'empty' && (
-        <EmptyState onSync={() => setPageState('sync')} />
-      )}
-
-      {/* With data state */}
-      {effectiveState === 'data' && (
-        <>
-          <PageHeader
-            sectionLabel="Portfolio"
-            title="Held Positions"
-            subtitle={[
-              fmtDollar(totalValue),
-              dailyChange !== 0 ? `${dailyChange >= 0 ? '+' : ''}${fmtDollar(Math.abs(dailyChange))} today` : null,
-              `${holdings.length} positions`,
-              avgHealth ? `Health: ${avgHealth}` : null,
-            ].filter(Boolean).join(' \u00B7 ')}
-            actions={
-              <>
-                <button
-                  className="btn btn-ghost"
-                  onClick={() => refreshMutation.mutate()}
-                  disabled={refreshMutation.isPending}
-                >
-                  {refreshMutation.isPending ? 'Refreshing...' : 'Refresh Prices'}
-                </button>
-                <button className="btn btn-accent" onClick={() => setShowEditor(true)}>
-                  Edit Positions
-                </button>
-              </>
-            }
-          />
-
-          {/* KPIs */}
-          <KpiRow>
-            <KpiCard
-              label="Portfolio Value"
-              value={fmtDollar(totalValue)}
-              detail={
-                dailyChange !== 0 ? (
-                  <span style={{ color: dailyChange >= 0 ? 'var(--positive)' : 'var(--negative)' }}>
-                    {dailyChange >= 0 ? '+' : ''}{fmtDollar(Math.abs(dailyChange))} today
-                  </span>
-                ) : undefined
-              }
-            />
-            <KpiCard
-              label="Total P&L"
-              value={fmtPct(totalPnlPct)}
-              valueColor={totalPnlPct >= 0 ? 'var(--positive)' : 'var(--negative)'}
-              detail={<span style={{ color: 'var(--text-muted)' }}>since inception</span>}
-            />
-            <KpiCard
-              label="Positions"
-              value={String(holdings.length)}
-              detail={posBreakdown ? <span style={{ color: 'var(--text-muted)' }}>{posBreakdown}</span> : undefined}
-            />
-            <KpiCard
-              label="Thesis Health"
-              value={hasStrategy ? (avgHealth ? String(avgHealth) : '—') : 'No strategy'}
-              valueColor={
-                !hasStrategy ? 'var(--text-muted)'
-                : avgHealth >= 70 ? 'var(--positive)'
-                : avgHealth >= 40 ? 'var(--warning)'
-                : avgHealth > 0 ? 'var(--negative)'
-                : 'var(--text-muted)'
-              }
-              detail={
-                hasStrategy
-                  ? <span style={{ color: 'var(--text-muted)' }}>weighted avg</span>
-                  : <Link to="/" style={{ color: 'var(--accent)', fontSize: 10 }}>Set up strategy →</Link>
-              }
-            />
-          </KpiRow>
-
-          {/* Strategy-aware banners */}
-          {!hasStrategy && (
-            <div className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 14px' }}>
-              <div>
-                <span style={{ fontWeight: 600, fontSize: 'var(--text-sm)' }}>Tracking P&amp;L only</span>
-                <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginLeft: 8 }}>
-                  Set up your investment strategy to enable thesis tracking, health scores, and allocation recommendations.
-                </span>
-              </div>
-              <Link to="/" className="btn btn-accent" style={{ whiteSpace: 'nowrap', textDecoration: 'none', padding: '5px 14px', fontSize: 'var(--text-xs)' }}>
-                Set up strategy
-              </Link>
-            </div>
-          )}
-
-          {/* Memo Generation — runs sequentially to avoid API rate limits */}
-          {holdings.length > 0 && (
-            <div className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 14px' }}>
-              <div>
-                <span style={{ fontWeight: 600, fontSize: 'var(--text-sm)' }}>
-                  Investment Memos
-                </span>
-                <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginLeft: 8 }}>
-                  Full research reports. Runs one at a time to respect API limits.
-                </span>
-                {memoStatus && (
-                  <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{memoStatus}</div>
-                )}
-              </div>
-              <button
-                className="btn btn-accent"
-                style={{ whiteSpace: 'nowrap', fontSize: 'var(--text-xs)' }}
-                onClick={runMemosSequentially}
-                disabled={memoRunning}
-              >
-                {memoRunning ? 'Running...' : `Generate Memos (${holdings.length})`}
-              </button>
-            </div>
-          )}
-
-          {/* Holdings Table */}
-          <div className="table-shell" style={{ overflowX: 'auto' }}>
-            <table>
-              <thead>
-                <tr>
-                  <th>Ticker</th>
-                  <th className="num">Shares</th>
-                  <th className="num">Cost</th>
-                  <th className="num">Price</th>
-                  <th className="num">P&amp;L</th>
-                  <th className="num">Weight</th>
-                  <th>Health</th>
-                  <th>Type</th>
-                </tr>
-              </thead>
-              <tbody>
-                {holdings.map((h) => (
-                  <ExpandableRow
-                    key={h.ticker}
-                    isExpanded={expandedTicker === h.ticker}
-                    onToggle={() => toggleExpand(h.ticker)}
-                    colSpan={8}
-                    summaryColumns={[
-                      // Ticker + company name
-                      <span key="t">
-                        <Link
-                          to={`/ticker/${h.ticker}`}
-                          className="ticker"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {h.ticker}
-                        </Link>
-                        {h.company_name && (
-                          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 1 }}>
-                            {h.company_name}
-                          </div>
-                        )}
-                      </span>,
-                      // Shares
-                      <span key="s" className="num" style={{ fontFamily: 'var(--font-data)' }}>
-                        {h.shares?.toLocaleString()}
-                      </span>,
-                      // Cost
-                      <span key="c" className="num" style={{ fontFamily: 'var(--font-data)' }}>
-                        ${h.cost_basis?.toFixed(2)}
-                      </span>,
-                      // Price
-                      <span key="p" className="num" style={{ fontFamily: 'var(--font-data)' }}>
-                        ${h.current_price?.toFixed(2)}
-                      </span>,
-                      // P&L
-                      <span
-                        key="pl"
-                        className="num"
-                        style={{
-                          fontFamily: 'var(--font-data)',
-                          color: (h.pnl_pct ?? 0) >= 0 ? 'var(--positive)' : 'var(--negative)',
-                        }}
-                      >
-                        {fmtPct(h.pnl_pct ?? 0)}
-                      </span>,
-                      // Weight (red if concentration breach > 15%)
-                      <span
-                        key="w"
-                        className="num"
-                        style={{
-                          fontFamily: 'var(--font-data)',
-                          color: (h.weight ?? 0) > 15 ? 'var(--negative)' : undefined,
-                        }}
-                      >
-                        {h.weight?.toFixed(1)}%
-                      </span>,
-                      // Health
-                      <span key="h" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                        <HealthDot score={h.health_score ?? 0} showScore />
-                        {h.health_trend && h.health_trend !== 'flat' && (
-                          <span style={{ fontSize: 10, color: 'var(--negative)' }}>
-                            {trendArrow(h.health_trend)}
-                          </span>
-                        )}
-                        {h.thesis_health?.some((a: any) => a.status === 'breach') && (
-                          <span style={{ color: 'var(--negative)', fontSize: 10, marginLeft: 4 }}>BREACH</span>
-                        )}
-                      </span>,
-                      // Type (Allocator-assigned, read-only)
-                      <span key="type" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-                        {h.type ?? '—'}
-                      </span>,
-                    ]}
-                    columnClasses={[undefined, 'num', 'num', 'num', 'num', 'num', undefined, undefined]}
-                    expandedContent={<HoldingExpandedContent h={h} hasStrategy={hasStrategy} />}
-                  />
-                ))}
-                {holdings.length === 0 && (
-                  <tr>
-                    <td colSpan={8} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: 20 }}>
-                      No positions loaded.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Thesis Alerts */}
-          {alerts.length > 0 && (
-            <div className="card" style={{ marginTop: 8 }}>
-              <div className="card-title">Thesis Alerts ({alerts.length})</div>
-              {alerts.map((a, i) => (
-                <div key={i} className={`alert-row${a.type === 'thesis_breach' || a.severity === 'critical' ? ' severity-critical' : ''}`}>
-                  <span className="alert-icon" style={{
-                    color: a.type === 'thesis_breach' || a.severity === 'critical' ? 'var(--negative)' : a.severity === 'warning' ? 'var(--warning)' : 'var(--text-muted)',
-                  }}>
-                    {a.type === 'thesis_breach' || a.severity === 'critical' ? '\u2717' : a.severity === 'warning' ? '\u26A0' : '\u25CF'}
-                  </span>
-                  <span>
-                    <Link to={`/ticker/${a.ticker}`} className="ticker">{a.ticker}</Link>
-                    {' '}{a.message}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-
-      {/* Position Editor Popup (overlay, independent of page state) */}
-      {showEditor && (
-        <PositionEditor
-          holdings={holdings}
-          hasStrategy={hasStrategy}
-          initialCash={data?.cash}
-          onClose={() => setShowEditor(false)}
-        />
-      )}
+      {fixLot && <FixLotModal lot={fixLot} onClose={() => setFixLot(null)} />}
     </div>
   );
 }

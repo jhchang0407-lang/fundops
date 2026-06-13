@@ -1,0 +1,3 @@
+# Explicit Strategy Proposal Acceptance
+
+Strategy Change Proposals require explicit user acceptance before creating a new active Constitution Version, either through chat confirmation or a dedicated review surface similar to a plan-acceptance flow. Strategy Chat may draft what it thinks the user wants, including the exact rules and per-capability wiring preview, but it must not save or wire that draft until the user approves it. We chose this because strategy activation changes downstream workflow behavior and should feel like accepting a reviewed plan, not clicking a vague generic apply button or letting chat silently mutate settings.

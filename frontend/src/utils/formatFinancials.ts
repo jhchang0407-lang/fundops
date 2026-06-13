@@ -41,12 +41,14 @@ export function fmtMultiple(val: number | undefined | null, decimals = 1): strin
 
 /** Format USD amount with K/M/B/T suffix. */
 export function fmtBigUsd(val: number | undefined | null): string {
-  if (val == null) return '—';
+  if (val == null || Number.isNaN(val)) return '—';
   const n = Number(val);
-  if (Math.abs(n) >= 1e12) return `$${(n / 1e12).toFixed(1)}T`;
-  if (Math.abs(n) >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
-  if (Math.abs(n) >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
-  return `$${n.toFixed(0)}`;
+  const a = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  if (a >= 1e12) return `${sign}$${(a / 1e12).toFixed(1)}T`;
+  if (a >= 1e9) return `${sign}$${(a / 1e9).toFixed(1)}B`;
+  if (a >= 1e6) return `${sign}$${(a / 1e6).toFixed(1)}M`;
+  return `${sign}$${a.toFixed(0)}`;
 }
 
 /**
@@ -89,6 +91,98 @@ export const FINANCIAL_FIELDS = {
 } as const;
 
 export type FinancialFieldName = keyof typeof FINANCIAL_FIELDS;
+
+/* ── Workflow rebuild additions ──────────────────────────────────────── */
+
+/** Compact USD for KPI rows: $1.2M / $830.4K / -$12. */
+export function fmtUsdCompact(val: number | undefined | null): string {
+  if (val == null || Number.isNaN(val)) return '—';
+  const n = Number(val);
+  const a = Math.abs(n);
+  const sign = n < 0 ? '-' : '';
+  if (a >= 1e12) return `${sign}$${(a / 1e12).toFixed(1)}T`;
+  if (a >= 1e9) return `${sign}$${(a / 1e9).toFixed(1)}B`;
+  if (a >= 1e6) return `${sign}$${(a / 1e6).toFixed(1)}M`;
+  if (a >= 1e3) return `${sign}$${(a / 1e3).toFixed(1)}K`;
+  return `${sign}$${a.toFixed(0)}`;
+}
+
+/** Signed compact USD for P&L: +$1.2K / -$340. */
+export function fmtPnl(val: number | undefined | null): string {
+  if (val == null || Number.isNaN(val)) return '—';
+  return `${Number(val) >= 0 ? '+' : ''}${fmtUsdCompact(val)}`;
+}
+
+/** Plain price: $182.34 */
+export function fmtPrice(val: number | undefined | null): string {
+  if (val == null || Number.isNaN(val)) return '—';
+  return `$${Number(val).toFixed(2)}`;
+}
+
+/**
+ * Parse a backend timestamp without timezone surprises. Date-only strings
+ * (YYYY-MM-DD — ledger dates, filing dates, as-of dates) are calendar dates:
+ * `new Date('2026-06-12')` would parse as UTC midnight and display as the
+ * previous day anywhere west of UTC, so they're constructed as local dates.
+ */
+export function parseDate(iso: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return new Date(iso);
+}
+
+/** Short date: Mar 4, 2026. Falls back to the raw string when unparseable. */
+export function fmtDate(iso: string | undefined | null): string {
+  if (!iso) return '—';
+  const d = parseDate(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+/** Today as a YYYY-MM-DD string in the user's local calendar (form defaults). */
+export function localToday(): string {
+  const d = new Date();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mm}-${dd}`;
+}
+
+/** Shares / integer counts with thousands separators. */
+export function fmtShares(val: number | undefined | null): string {
+  if (val == null || Number.isNaN(val)) return '—';
+  return Number(val).toLocaleString();
+}
+
+/** snake_case / camelCase → Title Case label. */
+export function humanizeLabel(key: string): string {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/**
+ * Heuristic formatter for arbitrary backend metric keys (screener key
+ * financials, company financial statements). Strings pass through as-is.
+ */
+export function fmtMetric(metric: string, value: number | string | null | undefined): string {
+  if (value == null || (typeof value === 'number' && Number.isNaN(value))) return '—';
+  if (typeof value === 'string') return value;
+  const m = metric.toLowerCase();
+  if (m.includes('market_cap') || m.includes('marketcap')) return fmtBigUsd(value);
+  if (m.includes('dollar_volume')) return fmtBigUsd(value);
+  if (/momentum|below_52w|drawdown/.test(m)) return pctSigned(value);
+  if (/(margin|growth|yield|roic|roe|roa|payout|conversion|volatility)/.test(m)) return pct(value);
+  if (/(^|_)volume/.test(m)) return Number(value).toLocaleString();
+  if (/(debt_equity|debtequity|debt_to|coverage|current_ratio|quick_ratio|turnover|quality)/.test(m)) return fmtRatio(value);
+  if (/(^|_)pe($|_)|price_to|ev_to|multiple/.test(m)) return fmtMultiple(value);
+  if (/price|cost|revenue|income|profit|assets|liabilit|equity|cash|debt|capex|fcf|flow|expenditure|dividend/.test(m)) {
+    return Math.abs(value) >= 1e5 ? fmtBigUsd(value) : `$${value.toFixed(2)}`;
+  }
+  if (/eps/.test(m)) return `$${value.toFixed(2)}`;
+  return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(2);
+}
 
 /** Auto-format a financial field value based on its canonical definition. */
 export function fmtField(fieldName: string, val: number | undefined | null): string {

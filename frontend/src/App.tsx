@@ -1,60 +1,106 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { BrowserRouter, Routes, Route, Link, Navigate } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
-import { JobTracker } from './components/JobTracker';
-import { Mirror } from './pages/Mirror';
-import { Dashboard } from './pages/Dashboard';
-import Configure from './pages/Configure';
-import { Screener } from './pages/Screener';
+import { ChatDrawer } from './components/chat/ChatDrawer';
+import { AskPopover } from './components/AskAnywhere';
+import { CommandPalette } from './components/CommandPalette';
+import { WiringOverlay } from './components/WiringOverlay';
+import Home from './pages/Home';
+import Dashboard from './pages/Dashboard';
+import Runs from './pages/Runs';
+import Settings from './pages/Settings';
+import Screener from './pages/Screener';
+import Thesis from './pages/Thesis';
+import ICReview from './pages/ICReview';
+import Memo from './pages/Memo';
+import Portfolio from './pages/Portfolio';
+import Library from './pages/Library';
 import Research from './pages/Research';
-import { Library } from './pages/Library';
-import { Portfolio } from './pages/Portfolio';
-import { Allocator } from './pages/Allocator';
-import { TickerDetail } from './pages/TickerDetail';
-import { Settings } from './pages/Settings';
+import CompanyPage from './pages/CompanyPage';
+import ArtifactReader from './pages/ArtifactReader';
 
-const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 1, staleTime: 30000 } },
-});
+function NotFound() {
+  return (
+    <div style={{ padding: '80px 24px', textAlign: 'center' }}>
+      <div
+        style={{
+          fontFamily: 'var(--font-data)',
+          fontSize: 'var(--text-xl)',
+          color: 'var(--text-muted)',
+          marginBottom: 8,
+        }}
+      >
+        404
+      </div>
+      <div
+        style={{
+          fontSize: 'var(--text-sm)',
+          color: 'var(--text-secondary)',
+          marginBottom: 16,
+        }}
+      >
+        This page does not exist.
+      </div>
+      <Link to="/" style={{ color: 'var(--teal-ink)', fontSize: 'var(--text-sm)' }}>
+        Go Home
+      </Link>
+    </div>
+  );
+}
 
 export default function App() {
+  const [wiringOpen, setWiringOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+      if (e.key === 'Escape') {
+        setPaletteOpen(false);
+        setWiringOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <div className="page-shell">
-          <Sidebar />
-          <div className="page-content">
-          <JobTracker />
+    <BrowserRouter>
+      <div className="page-shell">
+        <Sidebar onOpenWiring={() => setWiringOpen(true)} onOpenPalette={() => setPaletteOpen(true)} />
+        <div className="page-content">
           <main className="page-main">
             <Routes>
-              <Route path="/" element={<Configure />} />
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/mirror" element={<Mirror />} />
-              <Route path="/screener" element={<Screener />} />
-              <Route path="/research" element={<Research />} />
+              <Route path="/" element={<Home />} />
+              <Route path="/inbox" element={<Dashboard />} />
+              <Route path="/runs" element={<Runs />} />
+              <Route path="/markets" element={<Research />} />
               <Route path="/portfolio" element={<Portfolio />} />
               <Route path="/library" element={<Library />} />
-              <Route path="/allocator" element={<Allocator />} />
-              <Route path="/ticker/:ticker" element={<TickerDetail />} />
               <Route path="/settings" element={<Settings />} />
-              {/* Redirects */}
-              <Route path="/thesis" element={<Navigate to="/research" replace />} />
-              <Route path="/ic-review" element={<Navigate to="/research" replace />} />
-              {/* /dashboard redirect removed — now a real route above */}
-              <Route path="/memo" element={<Navigate to="/research" replace />} />
-              <Route path="/memo/:ticker" element={<Navigate to="/research" replace />} />
-              <Route path="*" element={
-                <div style={{ padding: '60px 24px', textAlign: 'center' }}>
-                  <div style={{ fontSize: 48, fontFamily: 'var(--font-data)', color: 'var(--accent)', marginBottom: 12 }}>404</div>
-                  <div style={{ fontSize: 14, color: 'var(--text-secondary)', marginBottom: 24 }}>Page not found</div>
-                  <a href="/dashboard" style={{ color: 'var(--accent)', fontSize: 13 }}>Go to Dashboard</a>
-                </div>
-              } />
+              <Route path="/company/:ticker" element={<CompanyPage />} />
+              <Route path="/artifact/:id" element={<ArtifactReader />} />
+              {/* stage workbenches — reached from Runs */}
+              <Route path="/screener" element={<Screener />} />
+              <Route path="/thesis" element={<Thesis />} />
+              <Route path="/ic-review" element={<ICReview />} />
+              <Route path="/memo" element={<Memo />} />
+              {/* legacy paths */}
+              <Route path="/dashboard" element={<Navigate to="/inbox" replace />} />
+              <Route path="/research" element={<Navigate to="/markets" replace />} />
+              <Route path="/chat" element={<Navigate to="/" replace />} />
+              <Route path="*" element={<NotFound />} />
             </Routes>
           </main>
-          </div>
         </div>
-      </BrowserRouter>
-    </QueryClientProvider>
+        <ChatDrawer />
+        <AskPopover />
+        <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+        {wiringOpen && <WiringOverlay onClose={() => setWiringOpen(false)} />}
+      </div>
+    </BrowserRouter>
   );
 }

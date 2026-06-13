@@ -9,7 +9,8 @@
     "start": "node scripts/start.mjs",
     "dev": "node scripts/start.mjs",
     "build": "cd frontend && npm run build",
-    "test": "cd frontend && npm test"
+    "sync": ".venv/bin/python -m backend.sync",
+    "test": ".venv/bin/python -m pytest tests/platform -q && cd frontend && npx tsc --noEmit"
   },
   "engines": {
     "node": ">=18"

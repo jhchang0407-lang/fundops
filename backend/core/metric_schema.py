@@ -212,13 +212,25 @@ _m("growth_vs_sector", "Growth vs Sector", ["growth_vs_sector_median", "growthVs
 _m("ey_vs_sector", "Earnings Yield vs Sector", ["ey_vs_sector_median", "earningsYieldVsSector"], "float", (0.0, 5.0), "computed")
 
 # ═══════════════════════════════════════════════════════════════════════════
-# MOMENTUM / RELATIVE STRENGTH (from yfinance)
+# MARKET TECHNICALS (computed locally from stored daily bars)
 # ═══════════════════════════════════════════════════════════════════════════
 
-_m("rs_3m", "3-Month Relative Strength", ["rs_3m_percentile", "relativeStrength3m", "rs3m", "momentum_3m"], "float", (0.0, 100.0), "yfinance",
-    notes="Percentile vs universe. 0 = worst, 100 = best.")
-_m("rs_6m", "6-Month Relative Strength", ["rs_6m_percentile", "relativeStrength6m", "rs6m", "momentum_6m"], "float", (0.0, 100.0), "yfinance",
-    notes="Percentile vs universe. 0 = worst, 100 = best.")
+_m("momentum_1m", "Momentum (1M)", ["return_1m", "momentum1m", "rs_1m"], "percent", (-0.95, 3.0), "computed",
+    notes="Trailing 1-month price return from stored daily bars. Decimal: 0.05 = +5%.")
+_m("momentum_3m", "Momentum (3M)", ["return_3m", "momentum3m", "rs_3m"], "percent", (-0.95, 4.0), "computed",
+    notes="Trailing 3-month price return. Decimal: 0.15 = +15%.")
+_m("momentum_6m", "Momentum (6M)", ["return_6m", "momentum6m", "rs_6m"], "percent", (-0.95, 5.0), "computed",
+    notes="Trailing 6-month price return. Decimal.")
+_m("momentum_12m", "Momentum (12M)", ["return_12m", "momentum12m", "rs_12m", "momentum_1y"], "percent", (-0.95, 8.0), "computed",
+    notes="Trailing 12-month price return. Decimal.")
+_m("pct_below_52w_high", "Below 52-Week High", ["below_52w_high", "off_52w_high", "pctBelow52wHigh"], "percent", (0.0, 1.0), "computed",
+    notes="Distance below the trailing 52-week high close. Decimal: 0.12 = 12% below.")
+_m("volatility_90d", "Volatility (90D)", ["realized_volatility", "volatility90d", "vol_90d"], "percent", (0.0, 3.0), "computed",
+    notes="Annualized realized volatility of daily returns over ~90 trading days. Decimal.")
+_m("avg_dollar_volume_3m", "Avg Dollar Volume (3M)", ["avgDollarVolume3m", "dollar_volume_3m", "adv_3m"], "float", (0.0, 1e11), "computed",
+    notes="Mean daily close x volume over ~63 trading days. Liquidity gate.")
+_m("avg_volume_3m", "Avg Volume (3M)", ["avgVolume3m", "average_volume_3m"], "float", (0.0, 1e10), "computed",
+    notes="Mean daily share volume over ~63 trading days.")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # COMPUTED BY SCREENER

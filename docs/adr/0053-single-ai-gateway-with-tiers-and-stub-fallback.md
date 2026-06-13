@@ -1,0 +1,5 @@
+# Single AI Gateway With Model Tiers and Deterministic Stub Fallback
+
+All FundOps model calls flow through one AI gateway that selects a model tier (a fast tier for extraction, classification, routing, and summaries; a deep tier for thesis writing, IC semantic review, memo sections, strategy interpretation, and learning analysis), forces structured JSON output, records an AI Usage Record and an Execution Provenance Record for every call, and caches identical calls in-process so repeated reads never re-spend tokens. We chose this because cost discipline, usage visibility, and provenance are platform requirements rather than per-workflow conventions, and a single chokepoint makes them impossible to skip.
+
+When no provider credential is configured, the gateway returns deterministic stub outputs derived from the call's input hash and real retained metrics, marked as model "stub" in execution provenance. We chose this so the full workflow spine remains exercisable offline and in tests, and so a new user sees the product shape before connecting a provider, without ever disguising stub output as model judgment.

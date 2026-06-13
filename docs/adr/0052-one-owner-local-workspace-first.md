@@ -1,0 +1,3 @@
+# One Owner Local Workspace First
+
+FundOps will optimize the baseline database architecture for one Workspace Owner using one Local FundOps Workspace, rather than designing v1 around collaborative accounts, shared permissions, multi-device merge semantics, or multi-writer conflict resolution. The workspace should still preserve stable identifiers, timestamps, provenance, archive metadata, append-only history, and forward migrations so backup, restore, export, and future sync-adjacent features remain possible. We choose this because FundOps is a personal retail-investor workflow first, and collaboration-first data modeling would add complexity to every record without serving the core product shape.
