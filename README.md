@@ -1,47 +1,60 @@
 # FundOps
 
-A local, AI-native investment operations workspace for one individual investor. Define your
-strategy in conversation, run a disciplined research funnel from screening to investment memos,
-keep source-backed evidence for every claim, monitor whether your theses are holding, and learn
-from outcomes over time — without ever delegating the investment decision to software.
+A local, AI-native investment operations workspace for one individual investor. FundOps turns
+plain-English strategy into a versioned Constitution, runs a durable research pipeline over
+retained market data, keeps source-backed evidence for every claim, and routes decisions back to
+you in an Inbox — without ever delegating the investment decision to software.
 
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Python](https://img.shields.io/badge/python-3.12+-blue)
 ![React](https://img.shields.io/badge/react-19-blue)
 
+## Screenshots
+
+| Home command surface | Durable workflow runs |
+|---|---|
+| ![FundOps Home command surface](docs/assets/screenshots/home-command-surface.png) | ![FundOps durable workflow runs](docs/assets/screenshots/workflow-runs.png) |
+
+| Markets research hub | Operations settings |
+|---|---|
+| ![FundOps Markets research hub](docs/assets/screenshots/markets-research.png) | ![FundOps Operations settings](docs/assets/screenshots/operations-settings.png) |
+
 ## What is this?
 
 FundOps is an investment learning partner, not an autonomous fund manager. The AI helps you
-articulate strategy, generates evidence-backed research artifacts, explains what changed, and
-proposes reviewable improvements — but strategy activation and portfolio actions are always
-yours, made through explicit approvals.
+articulate strategy, write evidence-backed research artifacts, explain what changed, and propose
+reviewable improvements. Strategy activation, candidate promotion, memo selection, and portfolio
+actions stay yours, made through explicit approvals.
 
 The core loop:
 
 ```
-Strategy Chat ──► Constitution (versioned, typed criteria, deterministic wiring)
-                       │
-   Screener ─► Thesis ─► IC Review ─► Investment Memo
-       │                                   │
-       └──── evidence, runs, artifacts ────┤
-                                           ▼
-   Portfolio (ledger) ◄── Thesis Health monitoring ──► Dashboard review queue
-                                           │
-                                  Learning / Evals
+Home Chat ──► Constitution (versioned criteria, deterministic wiring)
+                  │
+                  ▼
+       Runs: Screener ─► Thesis ─► IC Review ─► Investment Memo
+                  │                         │
+                  ├──── evidence + artifacts┤
+                  ▼                         ▼
+        Markets / Company Pages       Thesis Health
+                  │                         │
+                  └──── Portfolio + Learning ────► Inbox
 ```
 
 | Surface | What it does |
 |---------|-------------|
-| **FundOps Chat** | The primary surface. Strategy Chat turns plain-English strategy into a reviewable Constitution proposal you explicitly approve; Archive Q&A answers questions from your retained research history with citations. |
-| **Dashboard** | An unresolved attention and decision queue: pending approvals, Portfolio Review (positions under pressure + Constitution-fit opportunities), thesis breaks, failures. Not an activity feed. |
-| **Screener** | Deterministically applies your Constitution's screening requirements to a universe (Russell 2000 by default) and ranks survivors by your approved blend. Top Picks hand off to Thesis. |
-| **Thesis** | One-page AI-written opportunity arguments with explicit return-source decomposition. Ranked by return profile for IC Review. |
+| **Home** | The command surface: daily briefing, strategy chat, archive Q&A, data questions, slash commands, and the always-available conversation drawer. |
+| **Inbox** | The unresolved decision queue: pending Constitution approvals, portfolio pressure, Constitution-fit opportunities, thesis breaks, learning recommendations, and visible operational failures. |
+| **Runs** | Durable stage map for Screener → Thesis → IC Review → Memo. Each stage can run independently, resume, fail visibly, and hand off explicit selections downstream. |
+| **Markets** | Sector, industry, watchlist, and thematic research over retained local data, with bounded cited AI research runs when you ask for deeper work. |
+| **Screener** | Deterministically applies your Constitution's screening requirements to the active universe and ranks survivors by your approved blend. |
+| **Thesis** | One-page AI-written opportunity arguments with explicit return-source decomposition, ranked by return profile for IC Review. |
 | **IC Review** | The memo-worthiness gate: hard hurdles first, then a scored blend of conviction, Constitution fit, and data quality. You can override either way. |
-| **Memo** | Structured seven-section Investment Memos (fixed outline, comparable across companies) plus a separate machine-checkable monitoring plan. |
-| **Company Page** | The read-only dossier per ticker: workflow history map, full financials, and memo-backed thesis health. |
-| **Library** | Ticker-first archive lookup that opens the Company Page for any ticker FundOps has retained history on. |
-| **Portfolio** | Ledger-first: purchase lots and sales in, holdings and realized/unrealized P&L projected out. Held positions automatically get memo-backed thesis coverage. |
-| **Settings** | Operational only: providers, models, usage records, schedules, data export, destructive resets. Strategy never lives here. |
+| **Memo** | Structured seven-section Investment Memos plus a separate machine-checkable monitoring plan. |
+| **Company Page** | Read-only ticker dossier: workflow history map, retained financials, filings/events, ownership evidence, artifacts, and memo-backed thesis health. |
+| **Library** | Ticker-first archive lookup plus retained conversation history; opens the Company Page for any ticker FundOps has retained history on. |
+| **Portfolio** | Ledger-first: purchase lots and sales in, holdings and realized/unrealized P&L projected out. Held positions can queue memo-backed thesis coverage. |
+| **Settings** | Operations only: providers, models, usage records, sync status, data export, and destructive resets. Strategy never lives here. |
 
 Everything generated is a structured, versioned, source-linked artifact tied to the exact
 Constitution version, evidence bundle, and model steps that produced it.
@@ -80,7 +93,7 @@ FundOps can run its model work three ways:
    learning signals, never as silent rule changes.
 3. **Enter your holdings** — purchase lots and sales. FundOps projects P&L from the ledger and
    queues memo-backed thesis coverage for anything you hold.
-4. **Watch the Dashboard** — thesis breaks, portfolio pressure, Constitution-fit opportunities,
+4. **Watch the Inbox** — thesis breaks, portfolio pressure, Constitution-fit opportunities,
    and learning recommendations arrive as reviewable, evidence-first items.
 
 ## Data sources
@@ -123,15 +136,15 @@ backend/
 ├── domain/      # pure deterministic logic: criteria, guardrails, wiring, IC gate math,
 │                # thesis-health evaluation, ledger math, artifact contracts, metric catalog
 ├── stores/      # platform stores — the ONLY write path to the workspace database
-├── services/    # application services: market data, portfolio, dashboard projection, strategy
+├── services/    # application services: market data, portfolio, inbox projection, strategy
 │   └── ingest/  # bulk-first ingestion: SEC companyfacts + daily indexes + ownership, batched prices
 ├── workflows/   # durable workflow runs: screener, thesis, ic_review, memo, thesis_health,
 │                # learning, pipeline
 ├── chat/        # FundOps Chat: strategy chat + archive Q&A
 ├── connectors/  # SEC EDGAR + Yahoo Finance adapters
 └── api/         # thin FastAPI route adapters + SPA serving
-frontend/src/    # React 19 + TS: Chat, Dashboard, workflow pages, Company Page, Library,
-                 # Portfolio, Settings, Artifact Reader — custom dark institutional design system
+frontend/src/    # React 19 + TS: Home, Inbox, Runs, Markets, workflow pages, Company Page,
+                 # Library, Portfolio, Settings, Artifact Reader — custom app design system
 tests/platform/  # backend invariants: ledger math, guardrails, IC scoring, thesis health,
                  # workflow contracts, chat behaviors
 ```
@@ -145,7 +158,7 @@ Key invariants:
   supersede rather than overwrite; every calculated value records the metric-catalog version.
 - **Artifacts are append-only.** Historical outputs are never edited in place — new versions
   supersede, and every artifact records its evidence bundle and Constitution version.
-- **Projections are rebuildable.** Holdings, dashboard items, library lookups, and latest
+- **Projections are rebuildable.** Holdings, inbox items, library lookups, and latest
   financials are derived views over retained records, never independent truth.
 - **Operational failure ≠ investment judgment.** Retries and failures stay visible as
   operational state; they never become verdicts or learning evidence.

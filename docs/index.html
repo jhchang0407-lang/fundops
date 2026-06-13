@@ -4,9 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>FundOps — AI-Native Investment Operations Workspace</title>
-  <meta name="description" content="A local, AI-native investment operations workspace for one investor. Define strategy in conversation, run a disciplined research funnel from screening to investment memos, and monitor whether your theses are holding.">
+  <meta name="description" content="A local, AI-native investment operations workspace for one investor. Define strategy in conversation, run durable research workflows, browse retained market data, and route reviewable decisions into an Inbox.">
   <meta property="og:title" content="FundOps — AI-Native Investment Operations Workspace">
-  <meta property="og:description" content="Define your strategy in conversation, run a disciplined research funnel from screening to investment memos, and monitor whether your theses are holding — without delegating the investment decision to software.">
+  <meta property="og:description" content="Define strategy in conversation, run durable research workflows, browse retained market data, and monitor thesis health — without delegating the investment decision to software.">
   <meta property="og:type" content="website">
   <meta property="og:image" content="assets/og-image.png">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>F</text></svg>">
@@ -150,6 +150,37 @@
     .pipeline-node.active { border-color: var(--accent); color: var(--accent); }
     .pipeline-arrow { color: var(--text-muted); font-size: 1.2rem; }
 
+    /* Screenshots */
+    .screenshots-section {
+      max-width: 1120px;
+      margin: 0 auto 80px;
+      padding: 0 20px;
+    }
+    .screenshot-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+    .screenshot-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+    }
+    .screenshot-card img {
+      display: block;
+      width: 100%;
+      height: auto;
+      background: #e8e2d7;
+    }
+    .screenshot-caption {
+      padding: 12px 14px;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      border-top: 1px solid var(--border);
+    }
+
     /* Agent cards */
     .agent-grid {
       display: grid;
@@ -281,6 +312,7 @@
       .hero h1 { font-size: 2.2rem; }
       .hero p { font-size: 1rem; }
       .pipeline-flow { justify-content: flex-start; }
+      .screenshot-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -290,7 +322,7 @@
 <section class="hero">
   <div class="hero-badge">Open Source &middot; Public Beta</div>
   <h1><span>FundOps</span></h1>
-  <p>A local, AI-native investment operations workspace for one investor. Define your strategy in conversation, run a disciplined research funnel from screening to investment memos, and monitor whether your theses are holding — without ever delegating the decision to software.</p>
+  <p>A local, AI-native investment operations workspace for one investor. Define your strategy in conversation, run durable research workflows, browse retained market data, and route reviewable decisions into an Inbox — without ever delegating the decision to software.</p>
   <div class="hero-buttons">
     <a href="https://github.com/jhchang0407-lang/fundops" class="btn btn-primary">
       View on GitHub
@@ -301,11 +333,36 @@
   </div>
 </section>
 
+<!-- Screenshots -->
+<section class="screenshots-section">
+  <div class="section-label">Current product</div>
+  <h2 class="section-title">A working local investment desk</h2>
+  <p class="section-desc">FundOps is a real workspace: Home for briefing and chat, Runs for the research pipeline, Markets for retained sector and thematic work, and Settings for provider/data operations.</p>
+  <div class="screenshot-grid">
+    <div class="screenshot-card">
+      <img src="assets/screenshots/home-command-surface.png" alt="FundOps Home command surface with briefing, chat, and now panel">
+      <div class="screenshot-caption">Home combines briefing, strategy chat, archive Q&amp;A, data questions, and slash commands.</div>
+    </div>
+    <div class="screenshot-card">
+      <img src="assets/screenshots/workflow-runs.png" alt="FundOps Runs page with Screener, Thesis, IC review, and Memo stages">
+      <div class="screenshot-caption">Runs keeps each stage durable, resumable, and explicit about handoffs and failures.</div>
+    </div>
+    <div class="screenshot-card">
+      <img src="assets/screenshots/markets-research.png" alt="FundOps Markets page with sector browser and thematic research input">
+      <div class="screenshot-caption">Markets supports sector, industry, watchlist, and thematic research over retained local data.</div>
+    </div>
+    <div class="screenshot-card">
+      <img src="assets/screenshots/operations-settings.png" alt="FundOps Settings page with market data status and AI provider controls">
+      <div class="screenshot-caption">Settings is operational: sync status, provider choice, usage records, export, and reset controls.</div>
+    </div>
+  </div>
+</section>
+
 <!-- Core loop -->
 <section class="pipeline-section">
   <div class="section-label">How it works</div>
-  <h2 class="section-title">Strategy in, evidence-backed judgment out</h2>
-  <p class="section-desc">Describe your strategy in plain English and approve the resulting Constitution — exact rules, typed criteria, deterministic wiring. Every workflow downstream applies it the same way, and everything generated is a versioned, source-linked artifact.</p>
+  <h2 class="section-title">Strategy in, evidence-backed operations out</h2>
+  <p class="section-desc">Describe your strategy in plain English and approve the resulting Constitution — exact rules, typed criteria, deterministic wiring. Home, Runs, Markets, Portfolio, and Inbox all read from that same source of truth, and everything generated is a versioned, source-linked artifact.</p>
 
   <div class="pipeline-flow">
     <div class="pipeline-node active">Strategy Chat</div>
@@ -327,8 +384,16 @@
 
   <div class="agent-grid">
     <div class="agent-card">
-      <h3><span class="tag">CH</span> FundOps Chat</h3>
-      <p>The primary surface. Strategy Chat turns plain-English strategy into a reviewable Constitution proposal you explicitly approve; Archive Q&amp;A answers questions from your retained research history with citations.</p>
+      <h3><span class="tag">HM</span> Home</h3>
+      <p>The command surface. Strategy Chat turns plain-English strategy into a reviewable Constitution proposal; Archive Q&amp;A and data questions answer from retained records with citations.</p>
+    </div>
+    <div class="agent-card">
+      <h3><span class="tag">RN</span> Runs</h3>
+      <p>A durable stage map for Screener, Thesis, IC Review, and Memo. Stages run independently, resume, fail visibly, and hand off explicit selections downstream.</p>
+    </div>
+    <div class="agent-card">
+      <h3><span class="tag">MK</span> Markets</h3>
+      <p>Sector, industry, watchlist, and thematic research over retained local data, with bounded cited AI research runs when you need deeper work.</p>
     </div>
     <div class="agent-card">
       <h3><span class="tag">SC</span> Screener</h3>
@@ -357,6 +422,10 @@
     <div class="agent-card">
       <h3><span class="tag">PF</span> Portfolio</h3>
       <p>Ledger-first: purchase lots and sales in, holdings and realized/unrealized P&amp;L projected out. Held positions automatically get memo-backed thesis coverage.</p>
+    </div>
+    <div class="agent-card">
+      <h3><span class="tag">OP</span> Settings</h3>
+      <p>Operations only: provider selection, model usage records, sync status, cache/export controls, and destructive resets. Strategy never lives here.</p>
     </div>
   </div>
 </section>
