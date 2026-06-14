@@ -1,1330 +1,661 @@
-import React, { useState, type ReactNode } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
-import { api } from '../api/client';
+/**
+ * Research Hub (/research) — industry/sector/theme work, distinct from the
+ * per-company funnel. v1 is deterministic: a sector→industry browser over
+ * identity data, per-group dashboards aggregated from retained observations,
+ * watchlists/themes, and (Phase 4) bounded AI research runs that produce
+ * cited note artifacts.
+ */
+
+import { useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  Bar,
+  BarChart,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip as ChartTooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
+import {
+  createWatchlist,
+  deleteWatchlist,
+  exportUrls,
+  getIndustryDashboard,
+  getResearchNotes,
+  getSectors,
+  getThemeDashboard,
+  listWatchlists,
+  getThematicCurrent,
+  runThematicResearch,
+  searchFilingsFulltext,
+  startResearchRun,
+} from '../api/client';
+import type { FulltextHit, IndustryDashboard, Watchlist } from '../api/client';
 import { PageHeader } from '../components/PageHeader';
-import { VerdictBadge } from '../components/VerdictBadge';
+import { fmtDate, fmtMetric, humanizeLabel } from '../utils/formatFinancials';
 
-// ── Types ──────────────────────────────────────────────────────────────
+type Selection =
+  | { type: 'industry'; sector?: string; industry?: string; label: string }
+  | { type: 'theme'; id: string; label: string }
+  | null;
 
-type TabId = 'thesis' | 'ic' | 'approved';
+/* ────────────────────────── left rail ────────────────────────── */
 
-interface ThesisRow {
-  ticker: string;
-  company_name?: string;
-  fair_value?: number;
-  expected_return?: number;
-  discount?: number;
-  ic_verdict?: 'pass' | 'no_pass' | 'pending';
-  conviction?: number | string;  // backend may return number or "LOW"/"MEDIUM"/"HIGH"
-  conviction_max?: number;
-  why_it_exists?: string;
-  // Expanded detail
-  thesis_summary?: string;
-  thesis_narrative?: string;
-  web_research_note?: string;
-  // Constitution fit
-  constitution_criteria?: { label: string; met: boolean; actual: string }[];
-  anti_signals?: string[];
-  similar_tickers?: { ticker: string; return_pct: number }[];
-  // Valuation
-  valuation_method?: string;
-  current_pe?: string;
-  fair_pe?: string;
-  eps?: string;
-  growth?: string;
-  earnings_growth?: string;
-  valuation_note?: string;
-  // Pipeline stage
-  stage?: 'screened' | 'thesis_complete';
-}
-
-interface ICReviewRow {
-  ticker: string;
-  company_name?: string;
-  verdict: 'pass' | 'no_pass' | 'pending';
-  base_return?: number;
-  bear_return?: number;
-  conviction?: number | string;  // backend may return number or string
-  conviction_max?: number;
-  key_risk?: string;
-  criteria_met?: number;
-  criteria_total?: number;
-  anti_signal_count?: number;
-  date?: string;
-  // Expanded
-  haircut_pct?: number;
-  bear_hurdle?: number;
-  bear_fail_reason?: string;
-  discount_floor?: string;
-  discount_actual?: string;
-  discount_met?: boolean;
-  scorecard?: { label: string; met: boolean; actual: string }[];
-  anti_signals?: { label: string; value: string }[];
-  ai_review?: string;
-  key_assumptions?: string[];
-}
-
-interface ApprovedRow {
-  ticker: string;
-  company_name?: string;
-  approved_date?: string;
-  fair_value?: number;
-  expected_return?: number;
-  conviction?: number | string;
-  conviction_max?: number;
-  research_report_ready?: boolean;
-  investment_memo_ready?: boolean;
-  research_report_cost?: number;
-  investment_memo_cost?: number;
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
-/** Normalize conviction — backend may return a number (1-5) or string ("LOW"/"MEDIUM"/"HIGH") */
-function formatConviction(conviction: number | string | undefined, max: number = 5): string {
-  if (conviction == null) return '\u2014';
-  if (typeof conviction === 'number') return `${conviction}/${max}`;
-  const map: Record<string, string> = { LOW: '1/5', MEDIUM: '3/5', HIGH: '4/5', VERY_HIGH: '5/5' };
-  return map[String(conviction).toUpperCase()] ?? String(conviction);
-}
-
-// ── Prose snippet — clean plain-text summary with View full link ─────
-function stripMarkdown(raw: string): string {
-  return raw
-    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')  // [text](url) → text
-    .replace(/\*\*([^*]*)\*\*/g, '$1')          // **bold** → bold
-    .replace(/\*([^*]*)\*/g, '$1')              // *italic* → italic
-    .replace(/^#{1,6}\s+/gm, '')                // ## headers → plain
-    .replace(/\|[^\n]*\|/g, '')                 // | table rows |
-    .replace(/[-|]{3,}/g, '')                   // --- table separators
-    .replace(/\n{2,}/g, ' ')                    // collapse multi-newlines
-    .replace(/\n/g, ' ')                        // single newlines to space
-    .replace(/\s{2,}/g, ' ')                    // collapse whitespace
-    .trim();
-}
-
-function ProseSnippet({ text, ticker, limit = 600 }: { text?: string; ticker: string; limit?: number }) {
-  if (!text) return <span style={{ color: 'var(--text-muted)', fontSize: 'var(--text-xs)' }}>No narrative available. Run thesis for analysis.</span>;
-  const clean = stripMarkdown(text);
-  // Take up to 4-5 sentences within the char limit
-  let cutoff = 0;
-  let pos = 0;
-  for (let s = 0; s < 5; s++) {
-    const next = clean.indexOf('. ', pos);
-    if (next < 0 || next + 1 > limit) break;
-    cutoff = next + 1;
-    pos = next + 2;
+function SectorBrowser({
+  selected,
+  onSelect,
+}: {
+  selected: Selection;
+  onSelect: (s: Selection) => void;
+}) {
+  const { data } = useQuery({ queryKey: ['research-sectors'], queryFn: getSectors });
+  const [open, setOpen] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
+  const sectors = data?.sectors ?? [];
+  if (!sectors.length) {
+    return (
+      <div className="empty-note">
+        Sector data fills as the universe syncs identity information.
+      </div>
+    );
   }
-  if (cutoff === 0) cutoff = Math.min(clean.length, limit);
-  const summary = clean.length > cutoff ? clean.slice(0, cutoff).trimEnd() + '…' : clean;
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.6, flex: 1 }}>{summary}</span>
-      <Link to={`/ticker/${ticker}`} style={{ fontSize: 10, color: 'var(--accent)', textDecoration: 'none', whiteSpace: 'nowrap', flexShrink: 0, paddingTop: 2 }}>
-        View full →
-      </Link>
+    <div>
+      {sectors.map((s) => (
+        <div key={s.sector}>
+          <button
+            className="rail-item"
+            style={{
+              display: 'flex', width: '100%', alignItems: 'flex-start', gap: 6,
+              background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left',
+              padding: '5px 8px', color: 'var(--text-primary)', fontSize: 'var(--text-sm)',
+              lineHeight: 1.35,
+            }}
+            onClick={() => {
+              setOpen(open === s.sector ? null : s.sector);
+              setFilter('');
+              onSelect({ type: 'industry', sector: s.sector, label: s.sector });
+            }}
+          >
+            <span style={{ flexShrink: 0, width: 12, color: 'var(--text-muted)' }}>
+              {open === s.sector ? '▾' : '▸'}
+            </span>
+            <span style={{ flex: 1, minWidth: 0 }}>{s.sector}</span>
+            <span style={{ flexShrink: 0, color: 'var(--text-muted)', fontFamily: 'var(--font-data)' }}>{s.count}</span>
+          </button>
+          {open === s.sector && s.industries.length > 8 && (
+            <input
+              className="field"
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder={`Filter ${s.industries.length} industries…`}
+              aria-label={`Filter industries in ${s.sector}`}
+              style={{ margin: '4px 8px 6px 22px', width: 'calc(100% - 30px)', fontSize: 'var(--text-xs)' }}
+            />
+          )}
+          {open === s.sector &&
+            s.industries
+              .filter((i) => i.industry.toLowerCase().includes(filter.toLowerCase()))
+              .map((i) => (
+              <button
+                key={i.industry}
+                style={{
+                  display: 'flex', width: '100%', alignItems: 'flex-start', gap: 6,
+                  background:
+                    selected?.type === 'industry' && selected.industry === i.industry
+                      ? 'var(--bg-elevated)' : 'none',
+                  border: 'none', cursor: 'pointer', padding: '4px 8px 4px 26px',
+                  color: 'var(--text-secondary)', fontSize: 'var(--text-xs)',
+                  borderRadius: 'var(--radius-sm)', textAlign: 'left', lineHeight: 1.35,
+                }}
+                onClick={() => onSelect({ type: 'industry', industry: i.industry, label: i.industry })}
+              >
+                <span style={{ flex: 1, minWidth: 0 }}>{i.industry}</span>
+                <span style={{ flexShrink: 0, fontFamily: 'var(--font-data)' }}>{i.count}</span>
+              </button>
+            ))}
+        </div>
+      ))}
     </div>
   );
 }
 
-// ── Thesis Expanded Detail ────────────────────────────────────────────
-
-function ThesisExpanded({ row }: { row: ThesisRow }) {
-  const narrative = row.thesis_summary || row.thesis_narrative || row.why_it_exists;
-  const q = (row as any).quality || {};
-  const hasValuation = row.valuation_method && row.valuation_method !== 'screener';
-
-  // Build metric items for the compact bar
-  const metrics: { label: string; value: string; accent?: boolean; positive?: boolean }[] = [];
-  if (hasValuation) {
-    metrics.push({ label: 'Method', value: row.valuation_method?.replace(/_/g, ' ') || '\u2014' });
-    metrics.push({ label: 'Fair Value', value: row.fair_value != null ? `$${row.fair_value}` : '\u2014', accent: true });
-    if (row.current_pe) metrics.push({ label: 'P/E', value: `${row.current_pe}x` });
-    if (row.fair_pe) metrics.push({ label: 'Fair P/E', value: `${row.fair_pe}x` });
-    if (row.eps) metrics.push({ label: 'EPS', value: `$${row.eps}` });
-  }
-  if (row.growth) metrics.push({ label: 'Rev Growth', value: `${row.growth}%`, positive: Number(row.growth) > 0 });
-  if (row.earnings_growth) metrics.push({ label: 'Earn Growth', value: `${row.earnings_growth}%`, positive: Number(row.earnings_growth) > 0 });
-  if (q.gross_margin) metrics.push({ label: 'Gross Margin', value: `${q.gross_margin}%` });
-  if (q.roic) metrics.push({ label: 'ROIC', value: `${q.roic}%` });
-  if (q.roe) metrics.push({ label: 'ROE', value: `${q.roe}%` });
-  if (q.debt_equity != null) metrics.push({ label: 'D/E', value: `${q.debt_equity}` });
-  if (q.fcf_yield) metrics.push({ label: 'FCF Yield', value: `${q.fcf_yield}%` });
-
+function ThemesRail({
+  selected,
+  onSelect,
+}: {
+  selected: Selection;
+  onSelect: (s: Selection) => void;
+}) {
+  const qc = useQueryClient();
+  const { data } = useQuery({ queryKey: ['watchlists'], queryFn: listWatchlists });
+  const [adding, setAdding] = useState(false);
+  const [name, setName] = useState('');
+  const [tickers, setTickers] = useState('');
+  const create = useMutation({
+    mutationFn: () =>
+      createWatchlist(name.trim(), 'theme',
+        tickers.split(/[\s,]+/).map((t) => t.trim().toUpperCase()).filter(Boolean)),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['watchlists'] });
+      setAdding(false);
+      setName('');
+      setTickers('');
+    },
+  });
+  const remove = useMutation({
+    mutationFn: (id: string) => deleteWatchlist(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['watchlists'] }),
+  });
+  const lists = data?.watchlists ?? [];
   return (
-    <>
-      {/* Full-width thesis narrative — use all available space */}
-      {narrative && (
-        <div className="expanded-card" style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.7 }}>
-            {stripMarkdown(narrative)}
-          </div>
+    <div>
+      {lists.map((w: Watchlist) => (
+        <div key={w.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <button
+            style={{
+              flex: 1, display: 'flex', justifyContent: 'space-between',
+              background: selected?.type === 'theme' && selected.id === w.id ? 'var(--bg-elevated)' : 'none',
+              border: 'none', cursor: 'pointer', padding: '4px 8px',
+              color: 'var(--text-secondary)', fontSize: 'var(--text-xs)',
+              borderRadius: 'var(--radius-sm)',
+            }}
+            onClick={() => onSelect({ type: 'theme', id: w.id, label: w.name })}
+          >
+            <span>{w.name}</span>
+            <span style={{ fontFamily: 'var(--font-data)' }}>{w.tickers.length}</span>
+          </button>
+          <button
+            title="Delete list"
+            style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}
+            onClick={() => remove.mutate(w.id)}
+          >
+            ×
+          </button>
         </div>
+      ))}
+      {adding ? (
+        <div style={{ padding: '6px 8px', display: 'grid', gap: 6 }}>
+          <input className="editor-input" style={{ width: '100%' }} placeholder="Theme name" value={name}
+                 onChange={(e) => setName(e.target.value)} />
+          <input className="editor-input" style={{ width: '100%' }} placeholder="Tickers (AAPL MSFT …)" value={tickers}
+                 onChange={(e) => setTickers(e.target.value)} />
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button className="btn btn-accent" disabled={!name.trim() || create.isPending}
+                    onClick={() => create.mutate()}>
+              Save
+            </button>
+            <button className="btn btn-ghost" onClick={() => setAdding(false)}>Cancel</button>
+          </div>
+          {create.isError && (
+            <div style={{ fontSize: 10, color: 'var(--negative)' }}>
+              {(create.error as Error).message}
+            </div>
+          )}
+        </div>
+      ) : (
+        <button
+          style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 8px', color: 'var(--accent)', fontSize: 'var(--text-xs)' }}
+          onClick={() => setAdding(true)}
+        >
+          + New theme / watchlist
+        </button>
       )}
-
-      {/* Compact metrics bar — all valuation + quality in one horizontal strip */}
-      {metrics.length > 0 && (
-        <div style={{
-          display: 'flex', flexWrap: 'wrap', gap: '2px 16px', padding: '8px 12px',
-          background: 'var(--bg-tertiary)', borderRadius: 'var(--radius)', marginBottom: 8,
-          fontFamily: 'var(--font-data)', fontSize: 'var(--text-xs)',
-        }}>
-          {metrics.map((m) => (
-            <div key={m.label} style={{ display: 'flex', gap: 4, alignItems: 'baseline' }}>
-              <span style={{ color: 'var(--text-muted)' }}>{m.label}</span>
-              <span style={{
-                fontWeight: m.accent ? 600 : 500,
-                color: m.accent ? 'var(--accent)' : m.positive ? 'var(--positive)' : undefined,
-              }}>
-                {m.value}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Warnings */}
-      {(row as any).return_validation?.warnings?.length > 0 && (
-        <div style={{ marginBottom: 6 }}>
-          {(row as any).return_validation.warnings.map((w: string, i: number) => (
-            <div key={i} className="grounding-warning">{'\u26A0'} {w}</div>
-          ))}
-        </div>
-      )}
-
-      {/* Precedent / similar research */}
-      {(row as any).similar_research?.length > 0 && (
-        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: 8 }}>
-          <span style={{ fontFamily: 'var(--font-data)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>PRECEDENT </span>
-          {(row as any).similar_research.map((s: any) => (
-            <span key={s.ticker} style={{ marginRight: 8 }}>
-              <Link to={`/ticker/${s.ticker}`} className="ticker">{s.ticker}</Link>
-              <span style={{ color: s.verdict === 'PASS' ? 'var(--positive)' : s.verdict === 'NO_PASS' ? 'var(--negative)' : 'var(--text-muted)', marginLeft: 2 }}>
-                {s.verdict || s.entry_type}
-              </span>
-              {s.expected_return && <span> {s.expected_return}%</span>}
-            </span>
-          ))}
-        </div>
-      )}
-
-    </>
-  );
-}
-
-// ── IC Review Expanded Detail ─────────────────────────────────────────
-
-function ICExpanded({ row }: { row: ICReviewRow }) {
-  return (
-    <div className="expanded-cards" style={{ gridTemplateColumns: '1fr 1fr 1fr', marginBottom: 8 }}>
-      {/* Card 1: Bear Case Stress Test */}
-      <div className="expanded-card">
-        <div className="expanded-card-title">BEAR CASE STRESS TEST</div>
-        <div style={{
-          fontSize: 'var(--text-xs)', fontFamily: 'var(--font-data)',
-          display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '4px 12px', marginBottom: 8,
-        }}>
-          <div>
-            <span style={{ color: 'var(--text-muted)' }}>Base return</span>
-            <div style={{ fontSize: 'var(--text-sm)' }}>{row.base_return ?? '\u2014'}%</div>
-          </div>
-          <div>
-            <span style={{ color: 'var(--text-muted)' }}>Bear return</span>
-            <div style={{ fontSize: 'var(--text-sm)', color: (row.bear_return ?? 0) < (row.bear_hurdle ?? 15) ? 'var(--negative)' : undefined }}>
-              {row.bear_return ?? '\u2014'}%
-            </div>
-          </div>
-          <div>
-            <span style={{ color: 'var(--text-muted)' }}>Haircut applied</span>
-            <div style={{ fontSize: 'var(--text-sm)' }}>{row.haircut_pct ?? 70}%</div>
-          </div>
-          <div>
-            <span style={{ color: 'var(--text-muted)' }}>Bear hurdle</span>
-            <div style={{ fontSize: 'var(--text-sm)' }}>{row.bear_hurdle ?? 15}%</div>
-          </div>
-        </div>
-        {row.bear_fail_reason && (
-          <div style={{
-            fontSize: 'var(--text-xs)', padding: '6px 8px',
-            background: 'rgba(234,67,53,0.08)', borderRadius: 4, color: 'var(--negative)',
-          }}>
-            {row.bear_fail_reason}
-          </div>
-        )}
-        {row.discount_floor && (
-          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 6 }}>
-            Discount floor: {row.discount_floor} (steady-state). Actual: {row.discount_actual}.{' '}
-            <span style={{ color: row.discount_met ? 'var(--positive)' : 'var(--negative)' }}>
-              {row.discount_met ? 'Met.' : 'Not met.'}
-            </span>
-          </div>
-        )}
-      </div>
-
-      {/* Card 2: Constitution Scorecard */}
-      <div className="expanded-card">
-        <div className="expanded-card-title">CONSTITUTION SCORECARD</div>
-        {row.scorecard && row.scorecard.length > 0 ? (
-          <div style={{ fontSize: 'var(--text-xs)', marginBottom: 8 }}>
-            {row.scorecard.map((c) => (
-              <div key={c.label} style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '4px 0', borderBottom: '1px solid var(--border)',
-              }}>
-                <span style={{ color: c.met ? 'var(--positive)' : 'var(--negative)' }}>
-                  {c.met ? '\u2713' : '\u2717'}
-                </span>
-                <span style={{ color: 'var(--text-secondary)', flex: 1 }}>{c.label}</span>
-                <span style={{
-                  fontFamily: 'var(--font-data)',
-                  color: c.met ? 'var(--text-primary)' : 'var(--negative)',
-                }}>{c.actual}</span>
-                {(c as any).metric && <span style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-data)', fontSize: 10, marginLeft: 4 }}>({(c as any).metric})</span>}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: 8 }}>
-            {row.criteria_met ?? 0}/{row.criteria_total ?? 0} criteria met, {row.anti_signal_count ?? 0} anti-signals
-          </div>
-        )}
-        {row.anti_signals && row.anti_signals.length > 0 && (
-          <>
-            <div style={{ fontFamily: 'var(--font-data)', fontSize: 9, color: 'var(--text-muted)', letterSpacing: '0.06em', marginBottom: 4 }}>
-              ANTI-SIGNALS
-            </div>
-            {row.anti_signals.map((a) => (
-              <div key={a.label} style={{
-                fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0',
-              }}>
-                <span style={{ color: 'var(--negative)' }}>{'\u26A0'}</span>
-                <span style={{ color: 'var(--negative)' }}>{a.label}</span>
-                <span style={{ fontFamily: 'var(--font-data)', color: 'var(--text-muted)', marginLeft: 'auto' }}>{a.value}</span>
-              </div>
-            ))}
-          </>
-        )}
-      </div>
-
-      {/* Card 3: AI IC Review — truncated */}
-      <div className="expanded-card">
-        <div className="expanded-card-title">AI IC REVIEW</div>
-        <div style={{ marginBottom: 8 }}>
-          <ProseSnippet text={row.ai_review} ticker={row.ticker} />
-        </div>
-        {row.key_assumptions && row.key_assumptions.length > 0 && (
-          <>
-            <div style={{ fontSize: 'var(--text-xs)', fontFamily: 'var(--font-data)', color: 'var(--text-muted)', letterSpacing: '0.06em', marginBottom: 4 }}>
-              KEY ASSUMPTIONS TO MONITOR
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-              {row.key_assumptions.map((a) => (
-                <span key={a} style={{
-                  fontSize: 10, padding: '2px 7px', borderRadius: 10,
-                  background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)',
-                  border: '1px solid var(--border)',
-                }}>{a}</span>
-              ))}
-            </div>
-          </>
-        )}
-        {(row as any).similar_research?.length > 0 && (
-          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 8 }}>
-            <span style={{ fontFamily: 'var(--font-data)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>PRECEDENT </span>
-            {(row as any).similar_research.map((s: any) => (
-              <span key={s.ticker} style={{ marginRight: 8 }}>
-                <Link to={`/ticker/${s.ticker}`} className="ticker">{s.ticker}</Link>
-                <span style={{ color: s.verdict === 'PASS' ? 'var(--positive)' : s.verdict === 'NO_PASS' ? 'var(--negative)' : 'var(--text-muted)', marginLeft: 2 }}>
-                  {s.verdict || s.entry_type}
-                </span>
-                {s.expected_return && <span> {s.expected_return}%</span>}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
     </div>
   );
 }
 
-// ── Why It Exists — truncated with expand ────────────────────────────
+function NotesRail() {
+  const { data } = useQuery({ queryKey: ['research-notes'], queryFn: getResearchNotes });
+  const notes = data?.notes ?? [];
+  if (!notes.length) {
+    return <div style={{ padding: '2px 8px', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+      Research runs produce cited notes here.
+    </div>;
+  }
+  return (
+    <div>
+      {notes.slice(0, 8).map((n) => (
+        <Link key={n.id} to={`/artifact/${n.id}`}
+              style={{ display: 'block', padding: '4px 8px', fontSize: 'var(--text-xs)',
+                       color: 'var(--text-secondary)', textDecoration: 'none', lineHeight: 1.4 }}>
+          {n.title}
+          <span style={{ display: 'block', color: 'var(--text-muted)', fontFamily: 'var(--font-data)', fontSize: 10 }}>
+            {humanizeLabel(n.kind)} · {fmtDate(n.created_at)}
+          </span>
+        </Link>
+      ))}
+    </div>
+  );
+}
 
-export function _WhyItExists({ text }: { text?: string }) {
-  const [expanded, setExpanded] = React.useState(false);
-  if (!text) return <span style={{ color: 'var(--text-muted)' }}>{'\u2014'}</span>;
+/* ────────────────────────── dashboard body ────────────────────────── */
 
-  const LIMIT = 120;
-  const isLong = text.length > LIMIT;
-  const display = (!isLong || expanded) ? text : text.slice(0, LIMIT).trimEnd() + '…';
+const AGG_LABELS: [string, string][] = [
+  ['roic', 'Median ROIC'],
+  ['gross_margin', 'Median gross margin'],
+  ['revenue_growth', 'Median revenue growth'],
+  ['momentum_6m', 'Median 6M momentum'],
+];
+
+function GroupDashboard({ selection }: { selection: Selection }) {
+  const navigate = useNavigate();
+  const [sortBy, setSortBy] = useState('market_cap');
+  const [runNotice, setRunNotice] = useState<string | null>(null);
+  const enabled = selection != null;
+  const { data, isPending, isError, error } = useQuery<IndustryDashboard>({
+    queryKey: ['research-dash', selection],
+    queryFn: () =>
+      selection!.type === 'industry'
+        ? getIndustryDashboard({ sector: selection!.sector, industry: selection!.industry })
+        : getThemeDashboard(selection!.id),
+    enabled,
+  });
+  const run = useMutation({
+    mutationFn: (kind: string) =>
+      startResearchRun(
+        selection!.type === 'industry'
+          ? { kind, sector: selection!.sector, industry: selection!.industry }
+          : { kind, watchlist_id: selection!.id },
+      ),
+    onSuccess: (res) => navigate(`/artifact/${res.artifact_id}`),
+    onError: (err: Error) => setRunNotice(err.message),
+  });
+
+  if (!selection) {
+    return (
+      <div className="stage-empty">
+        Pick a sector, industry, or theme on the left — dashboards aggregate retained
+        local data; nothing is fetched on view.
+      </div>
+    );
+  }
+  if (isError) {
+    return (
+      <div className="stage-empty">
+        Could not load this dashboard: {error instanceof Error ? error.message : 'request failed'}
+      </div>
+    );
+  }
+  if (isPending || !data) return <div className="stage-empty">Aggregating…</div>;
+
+  const constituents = [...data.constituents].sort((a, b) => {
+    const av = a[sortBy] as number | null | undefined;
+    const bv = b[sortBy] as number | null | undefined;
+    return (bv ?? -Infinity) - (av ?? -Infinity);
+  });
 
   return (
     <div>
-      <span style={{ lineHeight: 1.5 }}>{display}</span>
-      {isLong && (
-        <span
-          onClick={() => setExpanded(v => !v)}
-          style={{ marginLeft: 4, color: 'var(--accent)', cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'var(--font-data)', fontSize: 9 }}
-        >
-          {expanded ? 'less' : 'more'}
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+        <h2 style={{ margin: 0, fontSize: 'var(--text-lg)', fontFamily: 'var(--font-display)' }}>
+          {data.group}
+        </h2>
+        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+          {data.size} companies · {data.with_data} with data · {data.insider_buys_90d} insider buys (90d)
         </span>
+        <a className="btn btn-ghost" style={{ marginLeft: 'auto' }}
+           href={selection.type === 'industry'
+             ? exportUrls.industry({ sector: selection.sector, industry: selection.industry })
+             : '#'}
+           aria-disabled={selection.type !== 'industry'}>
+          CSV
+        </a>
+      </div>
+
+      <div className="kpi-grid" style={{ marginBottom: 12 }}>
+        {(data.aggregate_metrics ?? AGG_LABELS.map(([m]) => m))
+          .filter((metric) => data.aggregates[metric])
+          .map((metric) => {
+          const agg = data.aggregates[metric];
+          return (
+            <div className="kpi-card" key={metric}>
+              <div className="kpi-label">Median {humanizeLabel(metric)}</div>
+              <div className="kpi-value num" style={{ textAlign: 'left' }}>
+                {agg?.median == null ? '—' : fmtMetric(metric, agg.median)}
+              </div>
+              {agg?.p25 != null && agg?.p75 != null && (
+                <div className="kpi-detail">
+                  p25 {fmtMetric(metric, agg.p25)} · p75 {fmtMetric(metric, agg.p75)}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {(data.pe_distribution.length > 0 || data.margin_trend.length > 1) && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12, marginBottom: 12 }}>
+          {data.pe_distribution.length > 0 && (
+            <div className="card" style={{ padding: '12px 14px' }}>
+              <div className="card-title">Valuation distribution · P/E</div>
+              <ResponsiveContainer width="100%" height={130}>
+                <BarChart data={data.pe_distribution} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
+                  <XAxis dataKey="bucket" axisLine={false} tickLine={false}
+                         tick={{ fontSize: 9, fill: 'var(--text-muted)', fontFamily: 'var(--font-data)' }} />
+                  <YAxis allowDecimals={false} width={24} axisLine={false} tickLine={false}
+                         tick={{ fontSize: 9, fill: 'var(--text-muted)', fontFamily: 'var(--font-data)' }} />
+                  <ChartTooltip
+                    cursor={{ fill: 'var(--bg-elevated)' }}
+                    contentStyle={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                                    borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-data)', fontSize: 11 }} />
+                  <Bar dataKey="count" name="Companies" fill="var(--accent-muted)" isAnimationActive={false} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+          {data.margin_trend.length > 1 && (
+            <div className="card" style={{ padding: '12px 14px' }}>
+              <div className="card-title">Median {data.trend_label ?? 'gross margin'} by fiscal year</div>
+              <ResponsiveContainer width="100%" height={130}>
+                <LineChart data={data.margin_trend} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
+                  <XAxis dataKey="year" axisLine={false} tickLine={false}
+                         tick={{ fontSize: 9, fill: 'var(--text-muted)', fontFamily: 'var(--font-data)' }} />
+                  <YAxis width={36} axisLine={false} tickLine={false}
+                         tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
+                         domain={['auto', 'auto']}
+                         tick={{ fontSize: 9, fill: 'var(--text-muted)', fontFamily: 'var(--font-data)' }} />
+                  <ChartTooltip
+                    formatter={(v) => `${((v as number) * 100).toFixed(1)}%`}
+                    contentStyle={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)',
+                                    borderRadius: 'var(--radius-md)', fontFamily: 'var(--font-data)', fontSize: 11 }} />
+                  <Line type="monotone" dataKey="median" name="Median margin" stroke="var(--accent)"
+                        strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </div>
       )}
-    </div>
-  );
-}
 
-// ── Thesis Tab ────────────────────────────────────────────────────────
-
-function ThesisTab() {
-  const queryClient = useQueryClient();
-  const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
-  const [actionStatus, setActionStatus] = useState<Record<string, string>>({});
-
-  const { data } = useQuery<{ results: ThesisRow[] }>({
-    queryKey: ['theses'],
-    queryFn: api.listTheses,
-  });
-
-  const runThesis = useMutation({
-    mutationFn: (ticker: string) => api.runThesis(ticker),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['theses'] });
-    },
-  });
-
-  const promoteTicker = useMutation({
-    mutationFn: (ticker: string) => api.promoteTicker(ticker),
-    onSuccess: (_data, ticker) => {
-      setActionStatus((s) => ({ ...s, [ticker]: 'overridden' }));
-      queryClient.invalidateQueries({ queryKey: ['theses'] });
-      queryClient.invalidateQueries({ queryKey: ['ic-reviews'] });
-    },
-  });
-
-  const dismissTicker = useMutation({
-    mutationFn: (ticker: string) => api.dismissTicker(ticker),
-    onSuccess: (_data, ticker) => {
-      setActionStatus((s) => ({ ...s, [ticker]: 'dismissed' }));
-      queryClient.invalidateQueries({ queryKey: ['theses'] });
-    },
-  });
-
-  const rows: ThesisRow[] = data?.results ?? [];
-
-  const screenedPending = rows.filter((r) => r.stage === 'screened');
-  // Sort thesis-complete by expected return descending to identify top 10
-  const thesisComplete = rows
-    .filter((r) => r.stage === 'thesis_complete' || r.fair_value != null)
-    .sort((a, b) => (b.expected_return ?? 0) - (a.expected_return ?? 0));
-  const top10Tickers = new Set(thesisComplete.slice(0, 10).map((r) => r.ticker));
-  const pendingIC = rows.filter((r) => r.stage === 'thesis_complete' && (!r.ic_verdict || r.ic_verdict === 'pending'));
-  void thesisComplete; void pendingIC; // used for display-only derived counts
-
-  const actionsCell = (row: ThesisRow) => {
-    const status = actionStatus[row.ticker];
-    if (status === 'overridden') return <span className="pill pill-positive" style={{ fontSize: 10 }}>Promoted</span>;
-    if (status === 'dismissed') return <span className="pill" style={{ fontSize: 10, color: 'var(--text-muted)' }}>Dismissed</span>;
-
-    // + button: promote to next stage
-    // For screened → runs thesis. For thesis_complete → moves to IC Review tab.
-    const isPending = row.stage === 'screened'
-      ? (runThesis.isPending && runThesis.variables === row.ticker)
-      : (promoteTicker.isPending && promoteTicker.variables === row.ticker);
-
-    const handlePromote = () => {
-      if (row.stage === 'screened') {
-        runThesis.mutate(row.ticker);
-      } else {
-        // Thesis-complete → promote to IC Review (just moves, doesn't run IC)
-        promoteTicker.mutate(row.ticker);
-      }
-    };
-
-    return (
-      <span onClick={(e) => e.stopPropagation()} style={{ display: 'inline-flex', gap: 4 }}>
-        <button
-          className="btn btn-accent"
-          style={{ fontSize: 10, padding: '3px 8px', minWidth: 24 }}
-          onClick={handlePromote}
-          disabled={isPending}
-          title={row.stage === 'screened' ? 'Run Thesis' : 'Move to IC Review'}
-        >
-          {isPending ? '...' : '+'}
-        </button>
-        <button
-          className="btn btn-ghost"
-          style={{ fontSize: 10, padding: '3px 8px', minWidth: 24 }}
-          onClick={() => dismissTicker.mutate(row.ticker)}
-          disabled={dismissTicker.isPending && dismissTicker.variables === row.ticker}
-          title="Dismiss"
-        >
-          {'\u2717'}
-        </button>
-      </span>
-    );
-  };
-
-  if (rows.length === 0) {
-    return (
-      <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
-        No theses yet. Run the Screener to discover candidates, then generate theses here.
-      </div>
-    );
-  }
-
-  return (
-    <>
-    {/* Stats line */}
-    <div style={{ marginBottom: 12 }}>
-      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', fontFamily: 'var(--font-data)' }}>
-        {screenedPending.length} screened · {thesisComplete.length} thesis complete · {pendingIC.length} pending IC
-      </span>
-    </div>
-    <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
-      <table>
-        <thead>
-          <tr>
-            <th>Ticker</th>
-            <th className="num">Fair Value</th>
-            <th className="num">Expected Return</th>
-            <th className="num">Discount</th>
-            <th className="num">Conviction</th>
-            <th>Stage</th>
-            <th style={{ textAlign: 'right', width: 70 }}>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {/* Top 10 thesis-complete items — yellow border */}
-          {thesisComplete.length > 0 && (
-            <tr>
-              <td colSpan={7} style={{ padding: '6px 0 2px', borderBottom: 'none' }}>
-                <span style={{ fontSize: 'var(--text-xs)', fontFamily: 'var(--font-data)', color: 'var(--accent)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                  TOP IDEAS — BEST {Math.min(10, thesisComplete.length)} BY EXPECTED RETURN
-                </span>
-              </td>
-            </tr>
-          )}
-          {thesisComplete.map((row) => {
-            if (actionStatus[row.ticker] === 'dismissed') return null;
-            const isExpanded = expandedTicker === row.ticker;
-            const isTop10 = top10Tickers.has(row.ticker);
-            return (
-              <React.Fragment key={row.ticker}>
-                <tr
-                  style={{ cursor: 'pointer', borderLeft: isTop10 ? '2px solid var(--accent)' : '2px solid var(--positive)' }}
-                  onClick={() => setExpandedTicker(isExpanded ? null : row.ticker)}
-                >
-                  <td>
-                    <Link to={`/ticker/${row.ticker}`} className="ticker" onClick={(e) => e.stopPropagation()}>
-                      {row.ticker}
-                    </Link>
-                    {row.company_name && (
-                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 2 }}>
-                        {row.company_name}
-                      </div>
-                    )}
-                  </td>
-                  <td className="num" style={{ fontFamily: 'var(--font-data)' }}>
-                    {row.fair_value != null ? `$${row.fair_value}` : '\u2014'}
-                  </td>
-                  <td className="num" style={{
-                    fontFamily: 'var(--font-data)',
-                    color: (row.expected_return ?? 0) >= 20 ? 'var(--positive)' : undefined,
-                  }}>
-                    {row.expected_return != null ? `${row.expected_return.toFixed(1)}%` : '\u2014'}
-                  </td>
-                  <td className="num" style={{ fontFamily: 'var(--font-data)' }}>
-                    {row.discount != null ? `${row.discount.toFixed(1)}%` : '\u2014'}
-                  </td>
-                  <td className="num" style={{ fontFamily: 'var(--font-data)' }}>
-                    {formatConviction(row.conviction, row.conviction_max ?? 5)}
-                  </td>
-                  <td>
-                    <span className="pill pill-positive" style={{ fontSize: 10 }}>COMPLETE</span>
-                  </td>
-                  <td style={{ textAlign: 'right' }}>{actionsCell(row)}</td>
-                </tr>
-                {isExpanded && (
-                  <tr>
-                    <td colSpan={7} style={{ padding: 0, borderTop: 'none' }}>
-                      <div className="expanded-area">
-                        <ThesisExpanded row={row} />
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
-                          <button
-                            className="btn btn-ghost"
-                            style={{ padding: '5px 12px', fontSize: 'var(--text-xs)' }}
-                            onClick={(e) => { e.stopPropagation(); runThesis.mutate(row.ticker); }}
-                            disabled={runThesis.isPending && runThesis.variables === row.ticker}
-                          >
-                            {runThesis.isPending && runThesis.variables === row.ticker ? 'Running...' : 'Re-run Thesis'}
-                          </button>
-                          <Link
-                            to={`/library?ticker=${row.ticker}`}
-                            className="btn btn-ghost"
-                            style={{ padding: '5px 12px', fontSize: 'var(--text-xs)', textDecoration: 'none' }}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            View in Library
-                          </Link>
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </React.Fragment>
-            );
-          })}
-          {/* Separator between thesis-complete and screened */}
-          {thesisComplete.length > 0 && screenedPending.length > 0 && (
-            <tr>
-              <td colSpan={7} style={{ padding: '10px 0 2px', borderBottom: 'none' }}>
-                <span style={{ fontSize: 'var(--text-xs)', fontFamily: 'var(--font-data)', color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
-                  SCREENED — PENDING THESIS ({screenedPending.length})
-                </span>
-              </td>
-            </tr>
-          )}
-          {screenedPending.map((row) => {
-            if (actionStatus[row.ticker] === 'dismissed') return null;
-            const isExpanded = expandedTicker === row.ticker;
-            return (
-              <React.Fragment key={row.ticker}>
-                <tr
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => setExpandedTicker(isExpanded ? null : row.ticker)}
-                >
-                  <td>
-                    <Link to={`/ticker/${row.ticker}`} className="ticker" onClick={(e) => e.stopPropagation()}>
-                      {row.ticker}
-                    </Link>
-                    {row.company_name && (
-                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 2 }}>
-                        {row.company_name}
-                      </div>
-                    )}
-                  </td>
-                  <td className="num" style={{ fontFamily: 'var(--font-data)' }}>
-                    {'\u2014'}
-                  </td>
-                  <td className="num" style={{
-                    fontFamily: 'var(--font-data)',
-                    color: (row.expected_return ?? 0) >= 20 ? 'var(--positive)' : undefined,
-                  }}>
-                    {row.expected_return != null ? `${row.expected_return.toFixed(1)}%` : '\u2014'}
-                  </td>
-                  <td className="num" style={{ fontFamily: 'var(--font-data)' }}>
-                    {'\u2014'}
-                  </td>
-                  <td className="num" style={{ fontFamily: 'var(--font-data)' }}>
-                    {'\u2014'}
-                  </td>
-                  <td>
-                    <span className="pill" style={{ fontSize: 10, background: 'rgba(255,179,0,0.12)', color: 'var(--warning, #e6a700)' }}>SCREENED</span>
-                  </td>
-                  <td style={{ textAlign: 'right' }}>{actionsCell(row)}</td>
-                </tr>
-                {isExpanded && (
-                  <tr>
-                    <td colSpan={7} style={{ padding: 0, borderTop: 'none' }}>
-                      <div className="expanded-area">
-                        <ThesisExpanded row={row} />
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
-                          <button
-                            className="btn btn-accent"
-                            style={{ padding: '5px 12px', fontSize: 'var(--text-xs)' }}
-                            onClick={(e) => { e.stopPropagation(); runThesis.mutate(row.ticker); }}
-                            disabled={runThesis.isPending && runThesis.variables === row.ticker}
-                          >
-                            {runThesis.isPending && runThesis.variables === row.ticker ? 'Running...' : 'Run Thesis'}
-                          </button>
-                          <Link
-                            to={`/library?ticker=${row.ticker}`}
-                            className="btn btn-ghost"
-                            style={{ padding: '5px 12px', fontSize: 'var(--text-xs)', textDecoration: 'none' }}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            View in Library
-                          </Link>
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </React.Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-    </>
-  );
-}
-
-// ── IC Review Tab ─────────────────────────────────────────────────────
-
-function ICReviewTab() {
-  const queryClient = useQueryClient();
-  const [expandedTicker, setExpandedTicker] = useState<string | null>(null);
-  const [actionStatus, setActionStatus] = useState<Record<string, string>>({});
-
-  const { data } = useQuery<{ results: ICReviewRow[] }>({
-    queryKey: ['ic-reviews'],
-    queryFn: api.listICReviews,
-  });
-
-  const runIC = useMutation({
-    mutationFn: (ticker: string) => api.runICReview(ticker),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['ic-reviews'] });
-      queryClient.invalidateQueries({ queryKey: ['approved'] });
-    },
-  });
-
-  const overrideIC = useMutation({
-    mutationFn: (ticker: string) => api.overrideICReview(ticker),
-    onSuccess: (_data, ticker) => {
-      setActionStatus((s) => ({ ...s, [ticker]: 'overridden' }));
-      queryClient.invalidateQueries({ queryKey: ['ic-reviews'] });
-      queryClient.invalidateQueries({ queryKey: ['approved'] });
-    },
-  });
-
-  const promoteTicker = useMutation({
-    mutationFn: (ticker: string) => api.promoteTicker(ticker),
-    onSuccess: (_data, ticker) => {
-      setActionStatus((s) => ({ ...s, [ticker]: 'overridden' }));
-      queryClient.invalidateQueries({ queryKey: ['ic-reviews'] });
-      queryClient.invalidateQueries({ queryKey: ['approved'] });
-      queryClient.invalidateQueries({ queryKey: ['approved-list'] });
-    },
-  });
-
-  const dismissTicker = useMutation({
-    mutationFn: (ticker: string) => api.dismissTicker(ticker),
-    onSuccess: (_data, ticker) => {
-      setActionStatus((s) => ({ ...s, [ticker]: 'dismissed' }));
-      queryClient.invalidateQueries({ queryKey: ['ic-reviews'] });
-    },
-  });
-
-  const rows: ICReviewRow[] = data?.results ?? [];
-
-  // Counts for action bar
-  const pendingIC = rows.filter((r) => r.verdict === 'pending');
-  const passedIC = rows.filter((r) => r.verdict === 'pass');
-  const failedIC = rows.filter((r) => r.verdict === 'no_pass');
-
-  if (rows.length === 0) {
-    return (
-      <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
-        No theses ready for IC review yet. Generate theses first from the Thesis tab.
-      </div>
-    );
-  }
-
-  return (
-    <>
-    {/* Stats line */}
-    <div style={{ marginBottom: 12 }}>
-      <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', fontFamily: 'var(--font-data)' }}>
-        {pendingIC.length} pending · {passedIC.length} passed · {failedIC.length} failed
-      </span>
-    </div>
-    <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
-      <table>
-        <thead>
-          <tr>
-            <th>Ticker</th>
-            <th>Verdict</th>
-            <th className="num">Base Return</th>
-            <th className="num">Bear Return</th>
-            <th className="num">Conviction</th>
-            <th>Key Risk</th>
-            <th>Constitution Scorecard</th>
-            <th>Date</th>
-            <th style={{ textAlign: 'right', width: 70 }}>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => {
-            const isExpanded = expandedTicker === row.ticker;
-            const status = actionStatus[row.ticker];
-            if (status === 'dismissed') return null;
-            return (
-              <React.Fragment key={row.ticker}>
-                <tr
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => setExpandedTicker(isExpanded ? null : row.ticker)}
-                >
-                  <td>
-                    <Link to={`/ticker/${row.ticker}`} className="ticker" onClick={(e) => e.stopPropagation()}>
-                      {row.ticker}
-                    </Link>
-                    {row.company_name && (
-                      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 2 }}>
-                        {row.company_name}
-                      </div>
-                    )}
-                  </td>
-                  <td><VerdictBadge verdict={row.verdict} /></td>
-                  <td className="num" style={{
-                    fontFamily: 'var(--font-data)',
-                    color: (row.base_return ?? 0) >= 20 ? 'var(--positive)' : undefined,
-                  }}>
-                    {row.base_return != null ? `${row.base_return}%` : '\u2014'}
-                  </td>
-                  <td className="num" style={{
-                    fontFamily: 'var(--font-data)',
-                    color: (row.bear_return ?? 0) < 15 ? 'var(--negative)' : undefined,
-                  }}>
-                    {row.bear_return != null ? `${row.bear_return}%` : '\u2014'}
-                  </td>
-                  <td className="num" style={{ fontFamily: 'var(--font-data)' }}>
-                    {formatConviction(row.conviction, row.conviction_max ?? 5)}
-                  </td>
-                  <td style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
-                    {row.key_risk || '\u2014'}
-                  </td>
-                  <td>
-                    <span className="pill pill-positive">
-                      {row.criteria_met ?? 0}/{row.criteria_total ?? 0} met
-                    </span>
-                    {(row.anti_signal_count ?? 0) > 0 ? (
-                      <span className="pill pill-negative">{row.anti_signal_count} anti</span>
-                    ) : (
-                      <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>0 anti</span>
-                    )}
-                  </td>
-                  <td style={{ fontFamily: 'var(--font-data)', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-                    {row.date ? new Date(row.date).toLocaleDateString() : '\u2014'}
-                  </td>
-                  <td style={{ textAlign: 'right' }}>
-                    {status === 'overridden' ? (
-                      <span className="pill pill-positive" style={{ fontSize: 10 }}>Approved</span>
-                    ) : status === 'dismissed' ? (
-                      <span className="pill" style={{ fontSize: 10, color: 'var(--text-muted)' }}>Dismissed</span>
-                    ) : (
-                      <span onClick={(e) => e.stopPropagation()} style={{ display: 'inline-flex', gap: 4 }}>
-                        <button
-                          className="btn btn-accent"
-                          style={{ fontSize: 10, padding: '3px 8px', minWidth: 24 }}
-                          onClick={() => {
-                            if (row.verdict === 'pass') {
-                              promoteTicker.mutate(row.ticker);
-                            } else if (row.verdict === 'no_pass') {
-                              overrideIC.mutate(row.ticker);
-                            } else {
-                              runIC.mutate(row.ticker);
-                            }
-                          }}
-                          disabled={
-                            (promoteTicker.isPending && promoteTicker.variables === row.ticker) ||
-                            (runIC.isPending && runIC.variables === row.ticker) ||
-                            (overrideIC.isPending && overrideIC.variables === row.ticker)
-                          }
-                          title={row.verdict === 'pass' ? 'Promote to Approved' : row.verdict === 'no_pass' ? 'Override to Approved' : 'Run IC Review'}
-                        >
-                          {(promoteTicker.isPending && promoteTicker.variables === row.ticker) || (runIC.isPending && runIC.variables === row.ticker) || (overrideIC.isPending && overrideIC.variables === row.ticker) ? '...' : '+'}
-                        </button>
-                        <button
-                          className="btn btn-ghost"
-                          style={{ fontSize: 10, padding: '3px 8px', minWidth: 24 }}
-                          onClick={() => dismissTicker.mutate(row.ticker)}
-                          disabled={dismissTicker.isPending && dismissTicker.variables === row.ticker}
-                          title="Dismiss"
-                        >
-                          {'\u2717'}
-                        </button>
-                      </span>
-                    )}
-                  </td>
-                </tr>
-                {isExpanded && (
-                  <tr>
-                    <td colSpan={9} style={{ padding: 0, borderTop: 'none' }}>
-                      <div className="expanded-area">
-                        <ICExpanded row={row} />
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
-                          <button
-                            className="btn btn-accent"
-                            style={{ padding: '5px 12px', fontSize: 'var(--text-xs)' }}
-                            onClick={(e) => { e.stopPropagation(); runIC.mutate(row.ticker); }}
-                            disabled={runIC.isPending && runIC.variables === row.ticker}
-                          >
-                            {runIC.isPending && runIC.variables === row.ticker ? 'Running...' : 'Run IC Review'}
-                          </button>
-                          {row.verdict === 'no_pass' && !actionStatus[row.ticker] && (
-                            <>
-                              <button
-                                className="btn btn-ghost"
-                                style={{ padding: '5px 12px', fontSize: 'var(--text-xs)' }}
-                                onClick={(e) => { e.stopPropagation(); overrideIC.mutate(row.ticker); }}
-                                disabled={overrideIC.isPending}
-                              >
-                                Override: Approve
-                              </button>
-                              <button
-                                className="btn btn-ghost"
-                                style={{ padding: '5px 12px', fontSize: 'var(--text-xs)' }}
-                                onClick={(e) => { e.stopPropagation(); dismissTicker.mutate(row.ticker); }}
-                                disabled={dismissTicker.isPending}
-                              >
-                                Dismiss
-                              </button>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </React.Fragment>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-    </>
-  );
-}
-
-// ── Approved Tab ──────────────────────────────────────────────────────
-
-function ApprovedTab() {
-  const queryClient = useQueryClient();
-  const [actionStatus, setActionStatus] = useState<Record<string, string>>({});
-
-  const dismissTicker = useMutation({
-    mutationFn: (ticker: string) => api.dismissTicker(ticker),
-    onSuccess: (_data, ticker) => {
-      setActionStatus((s) => ({ ...s, [ticker]: 'dismissed' }));
-      queryClient.invalidateQueries({ queryKey: ['approved'] });
-    },
-  });
-
-  const { data } = useQuery<{ results: ApprovedRow[] }>({
-    queryKey: ['approved'],
-    queryFn: api.listApproved,
-  });
-
-  const genReport = useMutation({
-    mutationFn: (ticker: string) => api.generateResearchReport(ticker),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['approved'] }),
-  });
-
-  const genMemo = useMutation({
-    mutationFn: (ticker: string) => api.generateInvestmentMemo(ticker),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['approved'] }),
-  });
-
-  const rows: ApprovedRow[] = data?.results ?? [];
-
-  const memoCount = rows.filter((r) => r.investment_memo_ready).length;
-  const reportCount = rows.filter((r) => r.research_report_ready).length;
-
-  const memoCell = (ready: boolean | undefined, onGenerate: () => void, _cost?: number, colorVar?: string, ticker?: string) => {
-    if (ready) {
-      return (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-          <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--positive)' }} />
-          <Link
-            to={`/library?tab=memos${ticker ? `&ticker=${ticker}` : ''}`}
-            className="btn btn-ghost"
-            style={{ fontSize: 10, padding: '3px 8px', textDecoration: 'none' }}
-          >
-            Read
-          </Link>
+      <div className="card" style={{ padding: '12px 14px', marginBottom: 12 }}>
+        <div className="card-title">Launch a research run</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 8 }}>
+          {([
+            ['industry_note', 'Industry note',
+             "Fan out across this group's filings: strategy, margins, capex cycles."],
+            ['peer_deep_dive', 'Peer deep-dive',
+             'Head-to-head: business model, unit economics, momentum, valuation.'],
+            ['fulltext', 'Thematic filing search',
+             'SEC full text: who mentions drones, tariffs, GLP-1 — anything.'],
+            ['risk_landscape', 'Risk landscape',
+             "What this group says it's afraid of, and what changed this year."],
+          ] as const).map(([kind, title, desc]) => (
+            <button
+              key={kind}
+              disabled={run.isPending && kind !== 'fulltext'}
+              onClick={() => {
+                if (kind === 'fulltext') {
+                  const input = document.getElementById('fulltext-query') as HTMLInputElement | null;
+                  input?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  input?.focus();
+                } else {
+                  run.mutate(kind);
+                }
+              }}
+              style={{
+                textAlign: 'left', cursor: 'pointer', padding: '10px 12px',
+                background: 'var(--bg-tertiary)', border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-md)', color: 'var(--text-primary)',
+              }}
+            >
+              <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', marginBottom: 3 }}>{title}</div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>{desc}</div>
+            </button>
+          ))}
         </div>
-      );
-    }
-    const isResearch = colorVar === 'info';
-    return (
-      <button
-        className={isResearch ? 'btn btn-ghost' : 'btn btn-accent'}
-        style={{
-          fontSize: 10,
-          padding: '3px 8px',
-          ...(isResearch ? { color: 'var(--info)', borderColor: 'rgba(66,133,244,0.3)' } : {}),
-        }}
-        onClick={onGenerate}
-      >
-        Generate
-      </button>
-    );
-  };
-
-  if (rows.length === 0) {
-    return (
-      <div style={{ textAlign: 'center', padding: '48px 24px', color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>
-        <div style={{ marginBottom: 8 }}>No approved stocks yet.</div>
-        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', lineHeight: 1.6 }}>
-          Workflow: IC Review tab → run IC Review on pending tickers → pass verdict → click <strong>+</strong> to promote here.
+        <div style={{ marginTop: 8, fontSize: 10, fontFamily: 'var(--font-data)', color: 'var(--text-muted)' }}>
+          Every claim cited to a filing section · produces a versioned artifact in your library
         </div>
+        {run.isPending && (
+          <div style={{ marginTop: 8, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+            Gathering metrics and filing excerpts, writing the note…
+          </div>
+        )}
+        {runNotice && (
+          <div className="banner banner-warning" style={{ marginTop: 8, fontSize: 'var(--text-xs)' }}>
+            {runNotice}
+          </div>
+        )}
       </div>
-    );
-  }
 
-  return (
-    <>
-      {/* Stats line */}
-      <div style={{ marginBottom: 12 }}>
-        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', fontFamily: 'var(--font-data)' }}>
-          {rows.length} approved · {memoCount} memos · {reportCount} reports
-        </span>
-      </div>
-      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: 10 }}>
-        IC-passed stocks ready for memo generation. Two memo types:{' '}
-        <strong style={{ color: 'var(--info)' }}>Research Report</strong> (fixed template) and{' '}
-        <strong style={{ color: 'var(--accent)' }}>Investment Memo</strong> (tailored to your strategy).
-      </div>
-      <div className="card" style={{ padding: 0, overflowX: 'auto' }}>
-        <table>
+      <div className="table-shell">
+        <table className="data-table">
           <thead>
             <tr>
               <th>Ticker</th>
-              <th>Approved</th>
-              <th className="num">FV</th>
-              <th className="num">Return</th>
-              <th className="num">Conv.</th>
-              <th style={{ textAlign: 'center' }}>Research Report</th>
-              <th style={{ textAlign: 'center' }}>Investment Memo</th>
-              <th style={{ textAlign: 'right', width: 40 }}></th>
+              <th>Company</th>
+              {data.constituent_metrics.map((m) => (
+                <th
+                  key={m}
+                  style={{ textAlign: 'right', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                  onClick={() => setSortBy(m)}
+                  title="Sort by this metric"
+                >
+                  {humanizeLabel(m)}{sortBy === m ? ' ↓' : ''}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => {
-              const status = actionStatus[row.ticker];
-              if (status === 'dismissed') return null;
-              return (
-              <tr key={row.ticker}>
-                <td>
-                  <Link to={`/ticker/${row.ticker}`} className="ticker">{row.ticker}</Link>
-                  {row.company_name && (
-                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 2 }}>
-                      {row.company_name}
-                    </div>
-                  )}
+            {constituents.slice(0, 50).map((c) => (
+              <tr key={String(c.ticker)}>
+                <td style={{ fontFamily: 'var(--font-data)' }}>
+                  <Link to={`/company/${c.ticker}`}>{String(c.ticker)}</Link>
                 </td>
-                <td style={{ fontFamily: 'var(--font-data)', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-                  {row.approved_date ? new Date(row.approved_date).toLocaleDateString() : '\u2014'}
-                </td>
-                <td className="num" style={{ fontFamily: 'var(--font-data)' }}>
-                  {row.fair_value != null ? `$${row.fair_value}` : '\u2014'}
-                </td>
-                <td className="num" style={{
-                  fontFamily: 'var(--font-data)',
-                  color: (row.expected_return ?? 0) >= 20 ? 'var(--positive)' : undefined,
-                }}>
-                  {row.expected_return != null ? `${row.expected_return}%` : '\u2014'}
-                </td>
-                <td className="num" style={{
-                  fontFamily: 'var(--font-data)',
-                  color: typeof row.conviction === 'number' && row.conviction <= 2 ? 'var(--warning)' : undefined,
-                }}>
-                  {formatConviction(row.conviction, row.conviction_max ?? 5)}
-                </td>
-                <td style={{ textAlign: 'center' }}>
-                  {memoCell(row.research_report_ready, () => genReport.mutate(row.ticker), row.research_report_cost, 'info', row.ticker)}
-                </td>
-                <td style={{ textAlign: 'center' }}>
-                  {memoCell(row.investment_memo_ready, () => genMemo.mutate(row.ticker), row.investment_memo_cost, 'accent', row.ticker)}
-                </td>
-                <td style={{ textAlign: 'right' }}>
-                  <button
-                    className="btn btn-ghost"
-                    style={{ fontSize: 10, padding: '3px 8px', minWidth: 24 }}
-                    onClick={() => dismissTicker.mutate(row.ticker)}
-                    disabled={dismissTicker.isPending && dismissTicker.variables === row.ticker}
-                    title="Remove from approved"
-                  >
-                    {'\u2717'}
-                  </button>
-                </td>
+                <td>{String(c.name ?? '')}</td>
+                {data.constituent_metrics.map((m) => (
+                  <td key={m} style={{ textAlign: 'right', fontFamily: 'var(--font-data)' }}>
+                    {fmtMetric(m, c[m] as number | null | undefined)}
+                  </td>
+                ))}
               </tr>
-              );
-            })}
+            ))}
           </tbody>
         </table>
       </div>
-
-      {/* Explanation bar */}
-      <div style={{
-        marginTop: 10, padding: '8px 12px', background: 'var(--bg-secondary)',
-        border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)',
-        fontSize: 'var(--text-xs)', color: 'var(--text-muted)', display: 'flex', gap: 20,
-      }}>
-        <div>
-          <strong style={{ color: 'var(--info)' }}>Research Report</strong> {'\u2014'} Fixed template. Industry analysis, TAM, peer comps, financial deep dive, risks. Same structure for every stock.
-        </div>
-        <div>
-          <strong style={{ color: 'var(--accent)' }}>Investment Memo</strong> {'\u2014'} Tailored to your constitution. Thesis fit, return sources through your lens, structured decision outputs, strategy-aware scenarios.
-        </div>
-      </div>
-    </>
+    </div>
   );
 }
 
-// ── Tab Config ────────────────────────────────────────────────────────
+/* ────────────────────────── thematic full-text search ────────────────────────── */
 
-// ── Main Component ────────────────────────────────────────────────────
+const THEME_STAGES: [string, string][] = [
+  ['discover', 'Discovering companies'],
+  ['reading', 'Reading 10-Ks'],
+  ['web', 'Web market research'],
+  ['synthesize', 'Writing the report'],
+  ['save', 'Saving report'],
+];
+
+function FulltextSearch() {
+  const navigate = useNavigate();
+  const [query, setQuery] = useState('');
+  const [hits, setHits] = useState<FulltextHit[] | null>(null);
+  const [watching, setWatching] = useState(false);
+  const search = useMutation({
+    mutationFn: () => searchFilingsFulltext(query.trim()),
+    onSuccess: (res) => setHits(res.hits),
+  });
+  // Live run state — polled every 2s while a run is in flight; the first fetch
+  // on mount re-attaches to a run still running after a reload.
+  const current = useQuery({
+    queryKey: ['thematic-current'],
+    queryFn: getThematicCurrent,
+    refetchInterval: (q) => (q.state.data?.status === 'running' ? 2000 : false),
+  });
+  const cur = current.data;
+  const running = cur?.status === 'running';
+  // Recover an in-flight run after a reload so its completion still opens the report.
+  useEffect(() => { if (running) setWatching(true); }, [running]);
+  // Open the report when a run we're watching finishes (never on a stale mount).
+  useEffect(() => {
+    if (watching && cur?.status === 'completed' && cur.artifact_id) {
+      setWatching(false);
+      navigate(`/artifact/${cur.artifact_id}`);
+    }
+  }, [watching, cur?.status, cur?.artifact_id, navigate]);
+
+  const deep = useMutation({
+    mutationFn: () => runThematicResearch(query.trim()),
+    onSuccess: () => { setWatching(true); current.refetch(); },
+  });
+  const busy = running || deep.isPending;
+  const stageIdx = THEME_STAGES.findIndex(([k]) => k === cur?.stage);
+
+  return (
+    <div className="card" style={{ padding: '12px 14px', marginBottom: 12 }}>
+      <div className="card-title">Thematic deep research</div>
+      <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginBottom: 8 }}>
+        Name a theme — FundOps discovers companies via EDGAR full-text, deep-reads each one's
+        10-K, and pulls web market context (sizing + major players) into a cited report.
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <input
+          id="fulltext-query"
+          className="editor-input"
+          style={{ flex: 1 }}
+          placeholder='A theme — try "drone market", "GLP-1", "data center power"…'
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && query.trim() && !busy) deep.mutate(); }}
+        />
+        <button className="btn btn-accent" disabled={!query.trim() || busy}
+                onClick={() => deep.mutate()}>
+          {busy ? 'Researching…' : 'Deep research →'}
+        </button>
+        <button className="btn btn-ghost" disabled={!query.trim() || search.isPending || busy}
+                title="Preview which companies mention this in filings, without the full read"
+                onClick={() => search.mutate()}>
+          {search.isPending ? 'Searching…' : 'Preview filings'}
+        </button>
+      </div>
+
+      {busy && (
+        <div className="banner banner-positive" style={{ marginTop: 10, fontSize: 'var(--text-xs)' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+            <span className="pulse-dot" />
+            Researching {cur?.theme ? `“${cur.theme}”` : 'theme'} — you can leave this page; it keeps running.
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            {THEME_STAGES.map(([key, label], i) => {
+              const state = stageIdx < 0
+                ? (i === 0 ? 'active' : 'pending')
+                : i < stageIdx ? 'done' : i === stageIdx ? 'active' : 'pending';
+              const extra = key === 'reading' && cur?.selected != null
+                ? ` (${cur?.read ?? 0}/${cur.selected})` : '';
+              return (
+                <div key={key} style={{ display: 'flex', gap: 6, alignItems: 'center',
+                  color: state === 'pending' ? 'var(--text-muted)' : 'var(--text-secondary)' }}>
+                  <span style={{ width: 14, textAlign: 'center' }}>
+                    {state === 'done' ? '✓' : state === 'active' ? '◌' : '·'}
+                  </span>
+                  <span style={{ fontWeight: state === 'active' ? 600 : 400 }}>{label}{extra}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {deep.isError && (
+        <div className="banner banner-warning" style={{ marginTop: 8, fontSize: 'var(--text-xs)' }}>
+          {(deep.error as Error).message}
+        </div>
+      )}
+      {!running && cur?.status === 'failed' && cur.error && (
+        <div className="banner banner-warning" style={{ marginTop: 8, fontSize: 'var(--text-xs)' }}>
+          Research failed: {cur.error}
+        </div>
+      )}
+      {!running && cur?.status === 'completed' && cur.note && !cur.artifact_id && (
+        <div className="empty-note" style={{ marginTop: 8 }}>{cur.note}</div>
+      )}
+
+      {search.isError && (
+        <div className="banner banner-warning" style={{ marginTop: 8, fontSize: 'var(--text-xs)' }}>
+          {(search.error as Error).message}
+        </div>
+      )}
+      {hits != null && (
+        hits.length === 0 ? (
+          <div className="empty-note" style={{ marginTop: 8 }}>
+            No filings matched (or EDGAR full-text search is unreachable right now).
+          </div>
+        ) : (
+          <>
+            <div style={{ marginTop: 10, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+              Discovery preview — companies that mention “{query.trim()}” in filings. Run
+              deep research above to read their 10-Ks and synthesize a cited report.
+            </div>
+            <div className="table-shell" style={{ marginTop: 6 }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Company</th><th style={{ width: 70 }}>Ticker</th>
+                    <th style={{ width: 70 }}>Form</th><th style={{ width: 100 }}>Filed</th>
+                    <th style={{ width: 90 }}>Universe</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {hits.slice(0, 12).map((h, i) => (
+                    <tr key={i}>
+                      <td>{h.company ?? '—'}</td>
+                      <td style={{ fontFamily: 'var(--font-data)' }}>
+                        {h.ticker && h.known
+                          ? <Link to={`/company/${h.ticker}`}>{h.ticker}</Link>
+                          : h.ticker ?? '—'}
+                      </td>
+                      <td style={{ fontFamily: 'var(--font-data)' }}>{h.form ?? '—'}</td>
+                      <td style={{ fontFamily: 'var(--font-data)' }}>{h.filed ?? '—'}</td>
+                      <td style={{ fontSize: 'var(--text-xs)', color: h.in_universe ? 'var(--positive)' : 'var(--text-muted)' }}>
+                        {h.in_universe ? 'in universe' : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )
+      )}
+    </div>
+  );
+}
+
+/* ────────────────────────── page ────────────────────────── */
 
 export default function Research() {
-  const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<TabId>('thesis');
-  // Refetch every 15s so pipeline results appear without manual refresh
-  const { data: thesisData } = useQuery<{ results: ThesisRow[] }>({ queryKey: ['thesis-list'], queryFn: api.listTheses, refetchInterval: 15_000, staleTime: 10_000 });
-  const { data: icData } = useQuery<{ results: ICReviewRow[] }>({ queryKey: ['ic-review-list'], queryFn: api.listICReviews, refetchInterval: 15_000, staleTime: 10_000 });
-  const { data: approvedData } = useQuery<{ results: ApprovedRow[] }>({ queryKey: ['approved-list'], queryFn: api.listApproved, refetchInterval: 15_000, staleTime: 10_000 });
-
-  // Derive counts for action buttons
-  const thesisRows = thesisData?.results ?? [];
-  // screenedPending count available via thesisRows.filter if needed
-  const icRows = icData?.results ?? [];
-  const _pendingIC = icRows.filter((r) => r.verdict === 'pending');
-  void _pendingIC; // count available for tab badges
-  const approvedRows = approvedData?.results ?? [];
-  const approvedWithoutMemo = approvedRows.filter((r) => !r.investment_memo_ready);
-  const approvedWithoutReport = approvedRows.filter((r) => !r.research_report_ready);
-
-  // Batch progress tracking
-  const [batchStatus, setBatchStatus] = useState<string | null>(null);
-
-  // Page-level batch mutations — all run sequentially with progress
-  const runBatchThesis = useMutation({
-    mutationFn: async () => {
-      const tickers = thesisRows.map((r) => r.ticker);
-      for (let i = 0; i < tickers.length; i++) {
-        setBatchStatus(`Running thesis ${i + 1}/${tickers.length}: ${tickers[i]}...`);
-        const result = await api.runThesis(tickers[i]);
-        // Wait for job to complete before starting the next one
-        if (result?.job_id) {
-          for (let j = 0; j < 120; j++) {
-            await new Promise(r => setTimeout(r, 2000));
-            try {
-              const job = await api.jobStatus(result.job_id);
-              if (job?.status === 'complete' || job?.status === 'failed') break;
-            } catch { break; }
-          }
-        }
-      }
-      setBatchStatus(null);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['theses'] });
-      queryClient.invalidateQueries({ queryKey: ['thesis-list'] });
-      queryClient.invalidateQueries({ queryKey: ['ic-reviews'] });
-      queryClient.invalidateQueries({ queryKey: ['ic-review-list'] });
-    },
-  });
-
-  const runBatchIC = useMutation({
-    mutationFn: async () => {
-      const tickers = icRows.map((r: any) => r.ticker);
-      for (let i = 0; i < tickers.length; i++) {
-        setBatchStatus(`Running IC review ${i + 1}/${tickers.length}: ${tickers[i]}...`);
-        const result = await api.runICReview(tickers[i]);
-        if (result?.job_id) {
-          for (let j = 0; j < 120; j++) {
-            await new Promise(r => setTimeout(r, 2000));
-            try {
-              const job = await api.jobStatus(result.job_id);
-              if (job?.status === 'complete' || job?.status === 'failed') break;
-            } catch { break; }
-          }
-        }
-      }
-      setBatchStatus(null);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['ic-reviews'] });
-      queryClient.invalidateQueries({ queryKey: ['ic-review-list'] });
-      queryClient.invalidateQueries({ queryKey: ['approved'] });
-      queryClient.invalidateQueries({ queryKey: ['approved-list'] });
-    },
-  });
-
-  const runBatchMemo = useMutation({
-    mutationFn: async () => {
-      for (let i = 0; i < approvedWithoutMemo.length; i++) {
-        setBatchStatus(`[${i + 1}/${approvedWithoutMemo.length}] Investment Memo: ${approvedWithoutMemo[i].ticker}...`);
-        const res = await api.generateInvestmentMemo(approvedWithoutMemo[i].ticker);
-        if (res?.job_id) {
-          for (let j = 0; j < 180; j++) {
-            await new Promise(r => setTimeout(r, 2000));
-            try {
-              const job = await api.jobStatus(res.job_id);
-              if (job?.status === 'complete' || job?.status === 'failed') break;
-            } catch { break; }
-          }
-        }
-        queryClient.invalidateQueries({ queryKey: ['approved-list'] });
-      }
-      setBatchStatus(null);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['approved'] });
-      queryClient.invalidateQueries({ queryKey: ['approved-list'] });
-    },
-  });
-
-  const runBatchReport = useMutation({
-    mutationFn: async () => {
-      for (let i = 0; i < approvedWithoutReport.length; i++) {
-        setBatchStatus(`[${i + 1}/${approvedWithoutReport.length}] Research Report: ${approvedWithoutReport[i].ticker}...`);
-        const res = await api.generateResearchReport(approvedWithoutReport[i].ticker);
-        if (res?.job_id) {
-          for (let j = 0; j < 180; j++) {
-            await new Promise(r => setTimeout(r, 2000));
-            try {
-              const job = await api.jobStatus(res.job_id);
-              if (job?.status === 'complete' || job?.status === 'failed') break;
-            } catch { break; }
-          }
-        }
-        queryClient.invalidateQueries({ queryKey: ['approved-list'] });
-      }
-      setBatchStatus(null);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['approved'] });
-      queryClient.invalidateQueries({ queryKey: ['approved-list'] });
-    },
-  });
-
-  const approvedWithoutBoth = approvedRows.filter((r) => !r.investment_memo_ready || !r.research_report_ready);
-
-  const runBatchBoth = useMutation({
-    mutationFn: async () => {
-      // Build a sequential queue: one memo at a time to respect API limits
-      const queue: { ticker: string; type: 'report' | 'memo'; label: string }[] = [];
-      for (const row of approvedRows) {
-        if (!row.research_report_ready) queue.push({ ticker: row.ticker, type: 'report', label: 'Research Report' });
-        if (!row.investment_memo_ready) queue.push({ ticker: row.ticker, type: 'memo', label: 'Investment Memo' });
-      }
-
-      for (let i = 0; i < queue.length; i++) {
-        const item = queue[i];
-        setBatchStatus(`[${i + 1}/${queue.length}] ${item.label}: ${item.ticker}...`);
-        const res = item.type === 'report'
-          ? await api.generateResearchReport(item.ticker)
-          : await api.generateInvestmentMemo(item.ticker);
-        // Wait for job to finish before starting next
-        if (res?.job_id) {
-          for (let j = 0; j < 180; j++) {
-            await new Promise(r => setTimeout(r, 2000));
-            try {
-              const job = await api.jobStatus(res.job_id);
-              if (job?.status === 'complete' || job?.status === 'failed') break;
-            } catch { break; }
-          }
-        }
-        // Refresh list after each so UI updates progressively
-        queryClient.invalidateQueries({ queryKey: ['approved-list'] });
-      }
-      setBatchStatus(null);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['approved'] });
-      queryClient.invalidateQueries({ queryKey: ['approved-list'] });
-    },
-  });
-
-  // Build the action button based on active tab
-  let headerAction: ReactNode = null;
-  if (activeTab === 'thesis') {
-    headerAction = (
-      <button
-        className="btn btn-accent"
-        onClick={() => runBatchThesis.mutate()}
-        disabled={runBatchThesis.isPending || thesisRows.length === 0}
-        style={{ fontSize: 'var(--text-xs)' }}
-      >
-        {runBatchThesis.isPending ? 'Generating Theses...' : `Run Thesis Generation${thesisRows.length > 0 ? ` (${thesisRows.length})` : ''}`}
-      </button>
-    );
-  } else if (activeTab === 'ic' && icRows.length > 0) {
-    headerAction = (
-      <button
-        className="btn btn-accent"
-        onClick={() => runBatchIC.mutate()}
-        disabled={runBatchIC.isPending}
-        style={{ fontSize: 'var(--text-xs)' }}
-      >
-        {runBatchIC.isPending ? 'Running IC Reviews...' : `Run IC Review (${icRows.length})`}
-      </button>
-    );
-  } else if (activeTab === 'approved' && approvedRows.length > 0) {
-    const bothPending = runBatchBoth.isPending || runBatchReport.isPending || runBatchMemo.isPending;
-    headerAction = (
-      <>
-        <button
-          className="btn btn-ghost"
-          onClick={() => runBatchReport.mutate()}
-          disabled={bothPending || approvedWithoutReport.length === 0}
-          style={{ fontSize: 'var(--text-xs)', color: 'var(--info)', borderColor: 'rgba(66,133,244,0.3)' }}
-        >
-          {runBatchReport.isPending ? 'Generating...' : `Reports${approvedWithoutReport.length > 0 ? ` (${approvedWithoutReport.length})` : ''}`}
-        </button>
-        <button
-          className="btn btn-ghost"
-          onClick={() => runBatchMemo.mutate()}
-          disabled={bothPending || approvedWithoutMemo.length === 0}
-          style={{ fontSize: 'var(--text-xs)' }}
-        >
-          {runBatchMemo.isPending ? 'Generating...' : `Memos${approvedWithoutMemo.length > 0 ? ` (${approvedWithoutMemo.length})` : ''}`}
-        </button>
-        <button
-          className="btn btn-accent"
-          onClick={() => runBatchBoth.mutate()}
-          disabled={bothPending || approvedWithoutBoth.length === 0}
-          style={{ fontSize: 'var(--text-xs)' }}
-        >
-          {runBatchBoth.isPending ? 'Generating...' : `Generate Both${approvedWithoutBoth.length > 0 ? ` (${approvedWithoutBoth.length})` : ''}`}
-        </button>
-      </>
-    );
-  }
-
-  const tabConfig = [
-    { id: 'thesis' as TabId, label: 'Thesis', count: (thesisData?.results ?? []).length },
-    { id: 'ic' as TabId, label: 'IC Review', count: (icData?.results ?? []).length },
-    { id: 'approved' as TabId, label: 'Approved', count: (approvedData?.results ?? []).length },
-  ];
-
+  const [selection, setSelection] = useState<Selection>(null);
   return (
     <div>
       <PageHeader
-        sectionLabel="Research"
-        title="Thesis + IC Pipeline"
-        subtitle="Validated ideas, IC verdicts, and what still needs memo-level work."
-        actions={headerAction}
+        sectionLabel="Markets"
+        title="Markets"
+        subtitle="Industry, sector, and thematic work over your retained local data — with bounded, cited AI research runs."
       />
-
-      {/* Batch progress */}
-      {batchStatus && (
-        <div style={{ padding: '6px 14px', background: 'var(--accent-subtle)', borderRadius: 'var(--radius)', marginBottom: 8, fontSize: 'var(--text-xs)', fontFamily: 'var(--font-data)', color: 'var(--accent)' }}>
-          {batchStatus}
-        </div>
-      )}
-
-      {/* Tab bar */}
-      <div className="tab-bar">
-        {tabConfig.map((tab) => (
-          <button
-            key={tab.id}
-            className={`tab${activeTab === tab.id ? ' active' : ''}`}
-            onClick={() => setActiveTab(tab.id)}
-          >
-            {tab.label}{' '}
-            <span className="tab-count">{tab.count}</span>
-          </button>
-        ))}
+      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+        <aside style={{ width: 230, flexShrink: 0 }}>
+          <div className="card" style={{ padding: '10px 8px', marginBottom: 10 }}>
+            <div className="card-title" style={{ padding: '0 8px' }}>Browse</div>
+            <SectorBrowser selected={selection} onSelect={setSelection} />
+          </div>
+          <div className="card" style={{ padding: '10px 8px', marginBottom: 10 }}>
+            <div className="card-title" style={{ padding: '0 8px' }}>Themes &amp; watchlists</div>
+            <ThemesRail selected={selection} onSelect={setSelection} />
+          </div>
+          <div className="card" style={{ padding: '10px 8px' }}>
+            <div className="card-title" style={{ padding: '0 8px' }}>Recent notes</div>
+            <NotesRail />
+          </div>
+        </aside>
+        <main style={{ flex: 1, minWidth: 0 }}>
+          <FulltextSearch />
+          <GroupDashboard selection={selection} />
+        </main>
       </div>
-
-      {/* Tab content */}
-      {activeTab === 'thesis' && <ThesisTab />}
-      {activeTab === 'ic' && <ICReviewTab />}
-      {activeTab === 'approved' && <ApprovedTab />}
     </div>
   );
 }

@@ -1,0 +1,3 @@
+# Raw Chat Is Evidence, Structured Records Are Memory
+
+FundOps will retain original Strategy Chat messages as Conversation Evidence, but normal recall and workflow behavior should use Structured Strategy Memory such as rule rationales, version rationales, accepted proposals, user preferences, and session summaries. This is a user/function behavior decision, not a database schema or RAG decision; exact storage and retrieval architecture are deferred. We chose this because replaying full chat transcripts for ordinary recall would be slow, expensive, and hallucination-prone, while structured memory gives reliable answers and still links back to raw evidence when audit or history is needed.

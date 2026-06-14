@@ -1,0 +1,3 @@
+# Retain Financial Corrections With Supersession
+
+FundOps will retain both original and corrected financial records when companies restate results, amend filings, providers correct historical data, or improved mappings and formulas revise historical interpretation. Corrections should create new Reported Financial Facts or Calculated Financial Observations and mark earlier records through Financial Data Supersession instead of overwriting them. Latest Financial Projections should use the current accepted records, while completed artifacts and Workflow Evidence Bundles remain tied to the exact records they used when produced.

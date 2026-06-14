@@ -1,0 +1,3 @@
+# Eager Financial Recalculation
+
+FundOps will eagerly recalculate affected financial observations, projections, and active monitoring state when new Reported Financial Facts, Financial Data Corrections, accepted mapping changes, or formula-version changes arrive. Recalculation should be scoped to affected entities, metrics, periods, Latest Financial Projections, and active Thesis Health state rather than rewriting completed artifacts or every historical record indiscriminately. We choose this over lazy read-time calculation so Company Page, Screener, Memo inputs, Portfolio Review, and Thesis Health remain current without each workflow independently discovering stale financial state.

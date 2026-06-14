@@ -1,393 +1,536 @@
-import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../api/client';
-import { Link } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  getDashboard,
+  getMonitoringDue,
+  getRun,
+  refreshDashboard,
+  refreshMonitoring,
+  respondDashboard,
+  runPipeline,
+} from '../api/client';
+import type { ActivityRow, DashboardItem, ResponseSetEntry } from '../api/client';
+import { PageHeader } from '../components/PageHeader';
+import { useToast } from '../components/Toast';
 
-const DEFAULT_SCHEDULES = [
-  { agent: 'Screener', description: 'Score universe against your strategy', frequency: 'Weekly', time: 'Sun 8:00 AM', status: 'active', cost: 'Free' },
-  { agent: 'Portfolio Monitor', description: 'Update prices, P&L, thesis health', frequency: 'Daily', time: '7:00 AM', status: 'active', cost: 'Free' },
-  { agent: 'Outcome Checker', description: 'Check prediction accuracy vs actuals', frequency: 'Daily', time: '6:00 AM', status: 'active', cost: 'Free' },
-  { agent: 'Library Sync', description: 'Collect and index new research artifacts', frequency: 'Weekly', time: 'Mon 6:00 AM', status: 'active', cost: 'Free' },
-  { agent: 'Full Pipeline', description: 'Scout → Thesis → IC → Pulse → Allocator', frequency: 'Weekly', time: 'Sun 9:00 AM', status: 'paused', cost: '~$0.50' },
-  { agent: 'Thesis Batch', description: 'Run thesis on all promoted screener picks', frequency: 'Manual', time: '—', status: 'manual', cost: '~$0.10/ticker' },
-  { agent: 'Memo Generation', description: 'Generate investment memo for IC-passed stocks', frequency: 'Manual', time: '—', status: 'manual', cost: '~$0.38/memo' },
-];
+/* ────────────────────────── helpers ────────────────────────── */
 
-export function Dashboard() {
-  const { data } = useQuery({ queryKey: ['dashboard'], queryFn: api.dashboard, refetchInterval: 30000 });
-  const { data: config } = useQuery({ queryKey: ['config'], queryFn: api.getConfig });
-  const { data: proposals } = useQuery({ queryKey: ['learning-proposals'], queryFn: api.getLearningProposals, staleTime: 120000 });
-  const { data: outcomes } = useQuery({ queryKey: ['learning-outcomes'], queryFn: () => api.getLearningOutcomes(undefined, 20), staleTime: 120000 });
-  const { data: drift } = useQuery({ queryKey: ['learning-drift'], queryFn: api.getLearningDrift, staleTime: 120000 });
-  const autonomyMode = config?.system?.autonomy_mode || 'suggest';
-  const { data: pendingData } = useQuery({ queryKey: ['pending-approvals'], queryFn: api.listPendingApprovals, staleTime: 30000 });
-  const { data: portfolioData } = useQuery({ queryKey: ['portfolio'], queryFn: api.portfolioStatus, staleTime: 60000 });
-  const qc = useQueryClient();
-  const approveMut = useMutation({
-    mutationFn: (id: number) => api.approvePending(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['pending-approvals'] }),
-  });
-  const rejectMut = useMutation({
-    mutationFn: (id: number) => api.rejectPending(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['pending-approvals'] }),
-  });
-  const pending = pendingData?.pending || [];
-  const d = data || {};
-  // Use direct portfolio data if available, fall back to dashboard's cached snapshot
-  const portfolio = portfolioData?.holdings?.length ? portfolioData : (d.latest_portfolio || {});
-  const rawHoldings = portfolioData?.holdings || d.latest_portfolio?.holdings || [];
-  const parsedHoldings = typeof rawHoldings === 'string' ? (() => { try { return JSON.parse(rawHoldings); } catch { return []; } })() : rawHoldings;
-  const holdings: any[] = (Array.isArray(parsedHoldings) ? parsedHoldings : []).filter((h: any) => typeof h === 'object');
-  const counts = d.agent_run_counts || {};
-  const recent = d.recent_runs || [];
-  const status = d.agent_status || {};
-  const savedSchedules = config?.system?.schedules || DEFAULT_SCHEDULES;
-  const savedAgents = new Set(savedSchedules.map((s: any) => s.agent));
-  const schedules = [
-    ...savedSchedules,
-    ...DEFAULT_SCHEDULES.filter((d: any) => !savedAgents.has(d.agent)).map((d: any) => ({ ...d, frequency: 'Manual', time: '—', status: 'manual' })),
-  ];
+function humanize(code: string): string {
+  const s = code.replace(/_/g, ' ');
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function normalizeResponses(rs?: ResponseSetEntry[]): { code: string; label: string }[] {
+  if (!rs) return [];
+  return rs
+    .map((r) => {
+      if (typeof r === 'string') return { code: r, label: humanize(r) };
+      const code = r.code ?? r.response ?? '';
+      if (!code) return null;
+      return { code, label: r.label ?? humanize(code) };
+    })
+    .filter((r): r is { code: string; label: string } => r !== null);
+}
+
+function extractTickers(refs: unknown): string[] {
+  const out = new Set<string>();
+  const visit = (v: unknown, depth: number) => {
+    if (depth > 3 || v == null) return;
+    if (typeof v === 'string') {
+      if (/^[A-Z]{1,6}(\.[A-Z])?$/.test(v)) out.add(v);
+      return;
+    }
+    if (Array.isArray(v)) {
+      v.forEach((x) => visit(x, depth + 1));
+      return;
+    }
+    if (typeof v === 'object') {
+      const o = v as Record<string, unknown>;
+      if (typeof o.ticker === 'string') out.add(o.ticker);
+      if (Array.isArray(o.tickers)) o.tickers.forEach((x) => visit(x, depth + 1));
+    }
+  };
+  visit(refs, 0);
+  return [...out].slice(0, 10);
+}
+
+function extractConfidence(item: DashboardItem): string | null {
+  const refs = item.evidence_refs;
+  if (refs && typeof refs === 'object' && !Array.isArray(refs)) {
+    const c = (refs as Record<string, unknown>).confidence_label;
+    if (typeof c === 'string') return c.replace(/_/g, ' ');
+  }
+  return null;
+}
+
+function fmtWhen(iso?: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function isStrategySource(item: DashboardItem): boolean {
+  const src = (item.source_type ?? '').toLowerCase();
+  return src.includes('proposal') || src.includes('strategy');
+}
+
+/* ────────────────────────── item renderers ────────────────────────── */
+
+function ResponseButtons({
+  item,
+  onRespond,
+  busy,
+}: {
+  item: DashboardItem;
+  onRespond: (item: DashboardItem, code: string) => void;
+  busy: boolean;
+}) {
+  const responses = normalizeResponses(item.response_set);
+  if (responses.length === 0) return null;
+  return (
+    <>
+      {responses.map((r) => (
+        <button
+          key={r.code}
+          className="resp-btn"
+          disabled={busy}
+          onClick={() => onRespond(item, r.code)}
+        >
+          {r.label}
+        </button>
+      ))}
+    </>
+  );
+}
+
+function DecisionCard({
+  item,
+  onRespond,
+  busyId,
+}: {
+  item: DashboardItem;
+  onRespond: (item: DashboardItem, code: string) => void;
+  busyId: string | null;
+}) {
+  const tickers = extractTickers(item.evidence_refs);
+  const confidence = extractConfidence(item);
+  const strategy = isStrategySource(item);
 
   return (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
-        <div>
-          <h1 style={{ fontSize: 'var(--text-xl)', fontWeight: 600 }}>Dashboard</h1>
-          <div style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-data)' }}>
-            {recent.length > 0 ? `updated ${new Date(recent[0]?.run_at).toLocaleString()}` : 'no data yet'}
+    <div className="dash-item">
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>
+            {item.ticker && (
+              <Link to={`/company/${item.ticker}`} className="ticker" style={{ marginRight: 8 }}>
+                {item.ticker}
+              </Link>
+            )}
+            {item.title}
           </div>
-        </div>
-      </div>
-
-      {/* KPIs */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 10 }}>
-        <div className="kpi-card">
-          <div className="kpi-label">Portfolio</div>
-          <div className="kpi-value">{(() => { const v = portfolio.total_value || 0; return v >= 1_000_000 ? `$${(v/1_000_000).toFixed(2)}M` : v >= 1_000 ? `$${(v/1_000).toFixed(1)}K` : `$${v.toLocaleString()}`; })()}</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label">Daily P&L</div>
-          <div className="kpi-value" style={{ color: (portfolio.daily_pnl || 0) >= 0 ? 'var(--positive)' : 'var(--negative)' }}>
-            ${(portfolio.daily_pnl || 0).toLocaleString()}
-          </div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label">Agent Runs</div>
-          <div className="kpi-value">{Object.values(counts).reduce((a: number, b: any) => a + (b as number), 0)}</div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label">Pipeline</div>
-          <div className="kpi-value" style={{ fontSize: 'var(--text-lg)' }}>
-            {counts.screener || 0} → {counts.thesis || 0} → {counts.ic_review || 0}
-          </div>
-        </div>
-        <div className="kpi-card">
-          <div className="kpi-label">Status</div>
-          <div className="kpi-value" style={{ fontSize: 'var(--text-lg)', color: 'var(--positive)' }}>Online</div>
-        </div>
-      </div>
-
-      {/* Learning Recommendation — only in suggest/autopilot mode */}
-      {autonomyMode !== 'manual' && <LearningRecommendation proposals={proposals} drift={drift} outcomes={outcomes} autonomyMode={autonomyMode} />}
-
-      {/* Main content */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 220px', gap: 8 }}>
-        <div className="card">
-          <div className="card-title">Recent Activity</div>
-          {recent.length === 0 && <div style={{ color: 'var(--text-muted)', fontSize: 'var(--text-sm)' }}>No activity yet. Run the pipeline to get started.</div>}
-          {recent.slice(0, 10).map((r: any, i: number) => (
-            <div key={i} style={{ padding: '4px 0', borderBottom: '1px solid var(--border)', fontSize: 'var(--text-sm)', display: 'flex', justifyContent: 'space-between' }}>
-              <span>
-                {r.agent}: <Link to={`/ticker/${r.ticker}`} className="ticker">{r.ticker}</Link>
-                {r.verdict && <span className={`badge ${r.verdict === 'PASS' ? 'badge-pass' : 'badge-nopass'}`} style={{ marginLeft: 4 }}>{r.verdict}</span>}
-              </span>
-              <span style={{ color: 'var(--text-muted)', fontSize: 10, fontFamily: 'var(--font-data)' }}>
-                {r.run_at ? new Date(r.run_at).toLocaleTimeString() : ''}
-              </span>
-            </div>
-          ))}
-        </div>
-
-        <div>
-          <div className="card">
-            <div className="card-title">Agent Status</div>
-            {Object.entries(status).map(([name, st]) => (
-              <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 'var(--text-sm)', padding: '3px 0' }}>
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: st === 'running' ? 'var(--accent)' : 'var(--text-muted)' }} />
-                {name}: {st as string}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Portfolio Holdings */}
-      {holdings.length > 0 && (
-        <div className="card" style={{ marginTop: 8 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <div className="card-title" style={{ marginBottom: 0 }}>
-              Holdings ({holdings.length})
-            </div>
-            <Link to="/portfolio" style={{ fontSize: 'var(--text-xs)', color: 'var(--accent)', textDecoration: 'none' }}>
-              View Portfolio {'\u2192'}
-            </Link>
-          </div>
-          <table style={{ width: '100%', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-data)', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ color: 'var(--text-muted)', textAlign: 'left' }}>
-                <th style={{ padding: '3px 0', fontWeight: 500 }}>Ticker</th>
-                <th style={{ padding: '3px 0', fontWeight: 500, textAlign: 'right' }}>Shares</th>
-                <th style={{ padding: '3px 0', fontWeight: 500, textAlign: 'right' }}>Avg Cost</th>
-                <th style={{ padding: '3px 0', fontWeight: 500, textAlign: 'right' }}>Price</th>
-                <th style={{ padding: '3px 0', fontWeight: 500, textAlign: 'right' }}>P&L</th>
-                <th style={{ padding: '3px 0', fontWeight: 500, textAlign: 'right' }}>Weight</th>
-              </tr>
-            </thead>
-            <tbody>
-              {holdings.slice(0, 10).map((h: any, i: number) => {
-                const pnlPct = h.pnl_pct ?? 0;
-                return (
-                  <tr key={i} style={{ borderBottom: '1px solid var(--border)' }}>
-                    <td style={{ padding: '4px 0' }}>
-                      <Link to={`/ticker/${h.ticker}`} className="ticker">{h.ticker}</Link>
-                      {h.lots?.length > 1 && (
-                        <span style={{ color: 'var(--text-muted)', fontSize: 9, marginLeft: 4 }}>
-                          {h.lots.length} lots
-                        </span>
-                      )}
-                    </td>
-                    <td style={{ padding: '4px 0', textAlign: 'right' }}>{(h.shares ?? 0).toLocaleString()}</td>
-                    <td style={{ padding: '4px 0', textAlign: 'right' }}>${(h.cost_basis ?? 0).toFixed(2)}</td>
-                    <td style={{ padding: '4px 0', textAlign: 'right' }}>${(h.current_price ?? 0).toFixed(2)}</td>
-                    <td style={{ padding: '4px 0', textAlign: 'right', color: pnlPct >= 0 ? 'var(--positive)' : 'var(--negative)' }}>
-                      {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
-                    </td>
-                    <td style={{ padding: '4px 0', textAlign: 'right', color: 'var(--text-muted)' }}>
-                      {(h.weight ?? 0).toFixed(1)}%
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {holdings.length > 10 && (
-            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 4, textAlign: 'center' }}>
-              + {holdings.length - 10} more positions
+          {item.body && (
+            <div
+              style={{
+                fontSize: 'var(--text-xs)',
+                color: 'var(--text-secondary)',
+                marginTop: 4,
+                lineHeight: 1.6,
+              }}
+            >
+              {item.body}
             </div>
           )}
+          {tickers.length > 0 && (
+            <div className="evidence-tickers">
+              {tickers.map((t) => (
+                <Link key={t} to={`/company/${t}`} className="citation-chip" style={{ textDecoration: 'none' }}>
+                  {t}
+                </Link>
+              ))}
+            </div>
+          )}
+          {item.rank_source && <div className="rank-source">{item.rank_source}</div>}
         </div>
-      )}
-
-      {/* Pending Approvals */}
-      {pending.length > 0 && (
-        <div className="card" style={{ marginTop: 8, border: '1px solid var(--warning)' }}>
-          <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--warning)', display: 'inline-block' }} />
-            Pending Approvals ({pending.length})
-          </div>
-          {pending.map((p: any) => {
-            const decision = p.decision_data ? (typeof p.decision_data === 'string' ? JSON.parse(p.decision_data) : p.decision_data) : {};
-            return (
-              <div key={p.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: 'var(--text-sm)' }}>
-                <div>
-                  <Link to={`/ticker/${p.ticker}`} className="ticker" style={{ fontWeight: 600 }}>{p.ticker}</Link>
-                  <span style={{ color: 'var(--text-muted)', marginLeft: 6 }}>
-                    IC {decision.verdict || 'PASS'} → waiting for {p.next_agent}
-                  </span>
-                  {decision.base_return && (
-                    <span style={{ color: 'var(--text-secondary)', marginLeft: 6, fontFamily: 'var(--font-data)', fontSize: 10 }}>
-                      base {decision.base_return}% / bear {decision.bear_return}%
-                    </span>
-                  )}
-                </div>
-                <div style={{ display: 'flex', gap: 4 }}>
-                  <button
-                    onClick={() => approveMut.mutate(p.id)}
-                    disabled={approveMut.isPending}
-                    style={{ padding: '2px 10px', fontSize: 11, background: 'var(--positive)', color: '#fff', border: 'none', borderRadius: 3, cursor: 'pointer' }}
-                  >Approve</button>
-                  <button
-                    onClick={() => rejectMut.mutate(p.id)}
-                    disabled={rejectMut.isPending}
-                    style={{ padding: '2px 10px', fontSize: 11, background: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 3, cursor: 'pointer' }}
-                  >Skip</button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Learning Context (compact footer) */}
-      {outcomes?.outcomes?.length > 0 && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '8px 0', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-data)', color: 'var(--text-muted)', borderTop: '1px solid var(--border)', marginTop: 8 }}>
-          <span style={{ letterSpacing: '0.08em', textTransform: 'uppercase' }}>LEARNING</span>
-          {(() => {
-            const alphas = outcomes.outcomes.filter((o: any) => o.alpha_pct != null).map((o: any) => o.alpha_pct);
-            const avg = alphas.length ? alphas.reduce((a: number, b: number) => a + b, 0) / alphas.length : null;
-            return avg != null ? (
-              <span style={{ color: avg >= 0 ? 'var(--positive)' : 'var(--negative)' }}>
-                Alpha: {avg >= 0 ? '+' : ''}{avg.toFixed(1)}%
-              </span>
-            ) : null;
-          })()}
-          <Link to="/mirror" style={{ color: 'var(--accent)', textDecoration: 'none', marginLeft: 'auto' }}>→ Open Mirror</Link>
-        </div>
-      )}
-
-      {/* Schedules */}
-      <div className="card" style={{ marginTop: 8 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <div className="card-title" style={{ marginBottom: 0 }}>Schedules</div>
-          <Link to="/settings" style={{ fontSize: 'var(--text-xs)', color: 'var(--accent)', textDecoration: 'none', opacity: 0.8 }}>
-            Edit in Settings →
+        {confidence && <span className="confidence-chip">{confidence}</span>}
+      </div>
+      <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+        {strategy && (
+          <Link to="/" className="resp-btn" style={{ textDecoration: 'none' }}>
+            Review in Chat
           </Link>
-        </div>
-        <table style={{ width: '100%', fontSize: 'var(--text-xs)', fontFamily: 'var(--font-data)', borderCollapse: 'collapse' }}>
-          <thead>
-            <tr style={{ color: 'var(--text-muted)', textAlign: 'left' }}>
-              <th style={{ padding: '4px 0', fontWeight: 500, width: '20%' }}>Agent</th>
-              <th style={{ padding: '4px 0', fontWeight: 500, width: '30%' }}>Description</th>
-              <th style={{ padding: '4px 0', fontWeight: 500, width: '15%' }}>Frequency</th>
-              <th style={{ padding: '4px 0', fontWeight: 500, width: '15%' }}>Time</th>
-              <th style={{ padding: '4px 0', fontWeight: 500, width: '10%' }}>Status</th>
-              <th style={{ padding: '4px 0', fontWeight: 500, width: '10%' }}>Cost</th>
-            </tr>
-          </thead>
-          <tbody>
-            {schedules.map((s: any, i: number) => (
-              <tr key={i} style={{ borderBottom: i < schedules.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                <td style={{ padding: '6px 0', fontWeight: 600 }}>{s.agent}</td>
-                <td style={{ padding: '6px 0', color: 'var(--text-muted)' }}>{s.description}</td>
-                <td style={{ padding: '6px 0' }}>{s.frequency}</td>
-                <td style={{ padding: '6px 0' }}>{s.time}</td>
-                <td style={{ padding: '6px 0' }}>
-                  <span style={{
-                    fontSize: 9, padding: '1px 6px', borderRadius: 3,
-                    background: s.status === 'active' ? 'rgba(52,168,83,0.15)' : s.status === 'paused' ? 'rgba(251,188,4,0.15)' : 'rgba(255,255,255,0.05)',
-                    color: s.status === 'active' ? 'var(--positive)' : s.status === 'paused' ? 'var(--warning)' : 'var(--text-muted)',
-                  }}>
-                    {s.status === 'active' ? 'ACTIVE' : s.status === 'paused' ? 'PAUSED' : 'MANUAL'}
-                  </span>
-                </td>
-                <td style={{ padding: '6px 0', color: 'var(--text-muted)' }}>{s.cost || '—'}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        )}
+        <ResponseButtons item={item} onRespond={onRespond} busy={busyId === item.id} />
       </div>
     </div>
   );
 }
 
-// ─── Learning Recommendation Card ──────────────────────────────────
-
-function LearningRecommendation({ proposals, drift, outcomes, autonomyMode }: {
-  proposals: any; drift: any; outcomes: any; autonomyMode: string;
+function ReviewRow({
+  item,
+  onRespond,
+  busyId,
+}: {
+  item: DashboardItem;
+  onRespond: (item: DashboardItem, code: string) => void;
+  busyId: string | null;
 }) {
-  const [dismissed, setDismissed] = useState(false);
-  void useQueryClient; // available for future use
-
-  const proposalCount = proposals?.count || 0;
-  const hasDrift = drift?.has_enough_data && (
-    (drift.style_drift?.length > 0) ||
-    (drift.signal_drift?.length > 0) ||
-    (drift.anti_signal_violations?.length > 0)
+  return (
+    <div
+      style={{
+        padding: '8px 0',
+        borderBottom: '1px solid rgba(42,43,54,0.7)',
+      }}
+    >
+      <div style={{ fontSize: 'var(--text-sm)' }}>
+        {item.ticker && (
+          <Link to={`/company/${item.ticker}`} className="ticker" style={{ marginRight: 8 }}>
+            {item.ticker}
+          </Link>
+        )}
+        {item.title}
+      </div>
+      {item.body && (
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: 2, lineHeight: 1.5 }}>
+          {item.body}
+        </div>
+      )}
+      {item.rank_source && <div className="rank-source">{item.rank_source}</div>}
+      <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+        <ResponseButtons item={item} onRespond={onRespond} busy={busyId === item.id} />
+      </div>
+    </div>
   );
-  const driftSummary = drift?.summary || '';
+}
 
-  // Build recommendation messages
-  const messages: { icon: string; text: string; detail: string; action?: string; link?: string }[] = [];
-
-  if (proposalCount > 0) {
-    const p = proposals.proposals?.[0];
-    messages.push({
-      icon: '\u2699',
-      text: `${proposalCount} scoring refinement${proposalCount > 1 ? 's' : ''} ready for review`,
-      detail: p?.proposal || 'Pattern detected in your feedback — a scoring adjustment is suggested.',
-      action: 'Discuss',
-      link: '/',
-    });
-  }
-
-  if (hasDrift) {
-    const driftItems = [
-      ...(drift.style_drift || []),
-      ...(drift.signal_drift || []),
-    ];
-    const firstDrift = driftItems[0];
-    messages.push({
-      icon: '\u26A0',
-      text: 'Behavioral drift detected',
-      detail: firstDrift || driftSummary || 'Your IC decisions are diverging from your stated strategy.',
-      link: '/',
-    });
-  }
-
-  if (outcomes?.outcomes?.length > 0) {
-    const alphas = outcomes.outcomes.filter((o: any) => o.alpha_pct != null).map((o: any) => o.alpha_pct);
-    const avg = alphas.length ? alphas.reduce((a: number, b: number) => a + b, 0) / alphas.length : null;
-    if (avg != null && Math.abs(avg) > 2) {
-      messages.push({
-        icon: avg >= 0 ? '\u2191' : '\u2193',
-        text: `Outcome tracking: ${avg >= 0 ? '+' : ''}${avg.toFixed(1)}% alpha across ${alphas.length} predictions`,
-        detail: avg >= 0
-          ? 'Your screener picks are outperforming the benchmark.'
-          : 'Screener picks are underperforming — consider reviewing scoring weights.',
-        link: '/',
-      });
-    }
-  }
-
-  if (messages.length === 0 || dismissed) return null;
+function AttentionCard({
+  item,
+  onRespond,
+  busyId,
+}: {
+  item: DashboardItem;
+  onRespond: (item: DashboardItem, code: string) => void;
+  busyId: string | null;
+}) {
+  const sev = (item.severity ?? '').toLowerCase();
+  const sevClass =
+    sev === 'high' || sev === 'critical'
+      ? 'dash-attn-high'
+      : sev === 'medium'
+        ? 'dash-attn-medium'
+        : 'dash-attn-low';
 
   return (
-    <div className="card" style={{
-      marginBottom: 8,
-      border: '1px solid var(--accent-muted)',
-      background: 'linear-gradient(135deg, rgba(245,166,35,0.06) 0%, var(--bg-secondary) 100%)',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--accent)', display: 'inline-block', animation: 'pulse 2s ease-in-out infinite' }} />
-          <span className="card-title" style={{ marginBottom: 0, fontSize: 'var(--text-sm)' }}>
-            FundOps has recommendations for you
-          </span>
-          <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 3, background: 'var(--accent-subtle)', color: 'var(--accent)', fontFamily: 'var(--font-data)', textTransform: 'uppercase' }}>
-            {autonomyMode}
-          </span>
-        </div>
-        <button
-          onClick={() => setDismissed(true)}
-          style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 14, padding: '0 4px' }}
-        >&times;</button>
+    <div className={`dash-item dash-item-attn ${sevClass}`}>
+      <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>
+        {item.ticker && (
+          <Link to={`/company/${item.ticker}`} className="ticker" style={{ marginRight: 8 }}>
+            {item.ticker}
+          </Link>
+        )}
+        {item.title}
       </div>
+      {item.body && (
+        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', marginTop: 4, lineHeight: 1.6 }}>
+          {item.body}
+        </div>
+      )}
+      {item.rank_source && <div className="rank-source">{item.rank_source}</div>}
+      <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+        <ResponseButtons item={item} onRespond={onRespond} busy={busyId === item.id} />
+      </div>
+    </div>
+  );
+}
 
-      {messages.map((msg, i) => (
-        <div key={i} style={{
-          display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 0',
-          borderTop: i > 0 ? '1px solid var(--border)' : 'none',
-        }}>
-          <span style={{ fontSize: 16, lineHeight: 1, marginTop: 2 }}>{msg.icon}</span>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--text-primary)', marginBottom: 2 }}>
-              {msg.text}
-            </div>
-            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-              {msg.detail}
-            </div>
-          </div>
-          {msg.link && (
-            <Link to={msg.link} style={{
-              fontSize: 'var(--text-xs)', color: 'var(--accent)', textDecoration: 'none',
-              padding: '4px 10px', border: '1px solid var(--accent-muted)', borderRadius: 'var(--radius-sm)',
-              whiteSpace: 'nowrap', alignSelf: 'center',
-            }}>
-              {msg.action || 'View'} →
-            </Link>
-          )}
+function Activity({ rows }: { rows: ActivityRow[] }) {
+  if (rows.length === 0) return <div className="empty-note">No recent activity.</div>;
+  return (
+    <div>
+      {rows.map((r, i) => (
+        <div key={i} className="activity-row">
+          <span className="activity-kind">{r.kind.replace(/_/g, ' ')}</span>
+          <span style={{ minWidth: 0, color: 'var(--text-secondary)' }}>
+            {r.ticker && (
+              <Link to={`/company/${r.ticker}`} className="ticker" style={{ marginRight: 6 }}>
+                {r.ticker}
+              </Link>
+            )}
+            {r.title}
+          </span>
+          <span className="activity-time">{fmtWhen(r.created_at)}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+/* ────────────────────────── page ────────────────────────── */
+
+export default function Dashboard() {
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [busyItemId, setBusyItemId] = useState<string | null>(null);
+  const [monitoringNote, setMonitoringNote] = useState<string | null>(null);
+  const [pipelineRunId, setPipelineRunId] = useState<string | null>(null);
+
+  const { data, isLoading } = useQuery({ queryKey: ['dashboard'], queryFn: getDashboard });
+  const { data: due } = useQuery({ queryKey: ['monitoring-due'], queryFn: getMonitoringDue });
+
+  const pipelineRun = useQuery({
+    queryKey: ['run', pipelineRunId],
+    queryFn: () => getRun(pipelineRunId!),
+    enabled: !!pipelineRunId,
+    refetchInterval: (query) => {
+      if (query.state.status === 'error') return false; // surfaced below, not polled forever
+      return query.state.data?.run?.status === 'running' || query.state.data === undefined ? 2500 : false;
+    },
+  });
+  const runStatus = pipelineRun.isError ? 'failed' : pipelineRun.data?.run?.status;
+
+  useEffect(() => {
+    if (pipelineRunId && (runStatus === 'completed' || runStatus === 'failed')) {
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      qc.invalidateQueries({ queryKey: ['monitoring-due'] });
+    }
+  }, [runStatus, pipelineRunId, qc]);
+
+  const respond = useMutation({
+    mutationFn: ({ item, code }: { item: DashboardItem; code: string }) =>
+      respondDashboard(item.id, code),
+    onMutate: ({ item }) => setBusyItemId(item.id),
+    onSuccess: (res, { item, code }) => {
+      // "Open" means open the thing — recording the response alone would be
+      // an invisible no-op from the user's point of view.
+      if (code === 'open') {
+        if (item.ticker) navigate(`/company/${item.ticker}`);
+        else {
+          const refs = Array.isArray(item.evidence_refs) ? item.evidence_refs as Array<Record<string, unknown>> : [];
+          const art = refs.find((r) => typeof r.id === 'string' && String(r.id).startsWith('art_'));
+          if (art) navigate(`/artifact/${art.id}`);
+        }
+      } else if (res?.note) {
+        // Feedback/learning responses resolve the item silently; surface what
+        // was captured (and any concrete effect) so it never looks like a no-op.
+        toast(res.note);
+      }
+    },
+    onError: (err: Error, { item }) =>
+      setMonitoringNote(`Response on “${item.title}” failed: ${err.message} — is the server reachable?`),
+    onSettled: () => {
+      setBusyItemId(null);
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+    },
+  });
+
+  const checkMonitoring = useMutation({
+    mutationFn: refreshMonitoring,
+    onSuccess: (res) => {
+      const n = res.refreshed?.length ?? 0;
+      const full = res.refreshed?.filter((r) => !r.metadata_only).length ?? 0;
+      setMonitoringNote(
+        n === 0
+          ? 'No tickers were due a thesis-health check.'
+          : `Checked ${n} ticker${n === 1 ? '' : 's'} — ${full} had new filings and were recomputed; the rest were metadata-only checks.`,
+      );
+      qc.invalidateQueries({ queryKey: ['monitoring-due'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+    },
+    onError: (err: Error) => setMonitoringNote(`Check failed: ${err.message}`),
+  });
+
+  const refresh = useMutation({
+    mutationFn: refreshDashboard,
+    onSettled: () => qc.invalidateQueries({ queryKey: ['dashboard'] }),
+  });
+
+  const pipeline = useMutation({
+    mutationFn: runPipeline,
+    onSuccess: (res) => setPipelineRunId(res.run_id),
+  });
+
+  const onRespond = (item: DashboardItem, code: string) => respond.mutate({ item, code });
+
+  const needsDecision = data?.needs_decision ?? [];
+  const pressure = data?.portfolio_review?.pressure ?? [];
+  const opportunities = data?.portfolio_review?.opportunities ?? [];
+  const reviewStale = data?.portfolio_review?.stale ?? false;
+  const needsAttention = data?.needs_attention ?? [];
+  const activity = data?.recent_activity ?? [];
+
+  const steps = pipelineRun.data?.steps ?? [];
+  const doneSteps = steps.filter((s) => s.status === 'completed').length;
+
+  return (
+    <div>
+      <PageHeader
+        sectionLabel="Inbox"
+        title="Inbox"
+        subtitle="Decisions and attention, pre-analyzed by your workflows — nothing here trades for you."
+        actions={
+          <>
+            <button
+              className="btn"
+              disabled={checkMonitoring.isPending}
+              onClick={() => checkMonitoring.mutate()}
+              title="Metadata-gated: full recompute only where new filings exist"
+            >
+              {checkMonitoring.isPending
+                ? 'Checking…'
+                : `Check for thesis updates${due != null ? ` · ${due.due} due` : ''}`}
+            </button>
+            <button
+              className="btn"
+              disabled={refresh.isPending}
+              onClick={() => refresh.mutate()}
+            >
+              {refresh.isPending ? 'Refreshing…' : 'Refresh'}
+            </button>
+            <button
+              className="btn btn-accent"
+              disabled={pipeline.isPending || runStatus === 'running'}
+              onClick={() => pipeline.mutate()}
+            >
+              {runStatus === 'running' ? 'Pipeline running…' : 'Run full pipeline'}
+            </button>
+          </>
+        }
+      />
+
+      {monitoringNote && (
+        <div className="banner" style={{ marginBottom: 10, color: 'var(--text-secondary)' }}>
+          {monitoringNote}
+        </div>
+      )}
+
+      {pipelineRunId && (
+        <div
+          className={`banner ${runStatus === 'completed' ? 'banner-positive' : runStatus === 'failed' ? '' : 'banner-warning'}`}
+          style={{
+            marginBottom: 10,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            ...(runStatus === 'failed'
+              ? { borderColor: 'rgba(234,67,53,0.3)', background: 'rgba(234,67,53,0.06)' }
+              : {}),
+          }}
+        >
+          {runStatus === 'running' || runStatus == null ? (
+            <>
+              <span
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background: 'var(--accent)',
+                  animation: 'pulse 1.2s ease-in-out infinite',
+                  flexShrink: 0,
+                }}
+              />
+              <span>
+                Pipeline running
+                {steps.length > 0 ? ` — ${doneSteps}/${steps.length} steps complete` : '…'}
+              </span>
+            </>
+          ) : runStatus === 'completed' ? (
+            <span>Pipeline completed. Stage pages have fresh output.</span>
+          ) : (
+            <span>
+              Pipeline failed{pipelineRun.data?.run?.error ? `: ${pipelineRun.data.run.error}` : '.'}{' '}
+              Operational failure — no investment judgment was recorded.
+            </span>
+          )}
+          <button
+            onClick={() => setPipelineRunId(null)}
+            style={{
+              marginLeft: 'auto',
+              background: 'none',
+              border: 'none',
+              color: 'var(--text-muted)',
+              cursor: 'pointer',
+              fontSize: 14,
+            }}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {isLoading && <div className="empty-note">Loading inbox…</div>}
+
+      {/* ── Decisions ── */}
+      <div className="dash-section">
+        <div className="section-label">
+          Decisions{needsDecision.length > 0 ? ` · ${needsDecision.length}` : ''}
+        </div>
+        {needsDecision.length === 0 ? (
+          <div className="empty-note">No unresolved decisions.</div>
+        ) : (
+          needsDecision.map((item) => (
+            <DecisionCard key={item.id} item={item} onRespond={onRespond} busyId={busyItemId} />
+          ))
+        )}
+      </div>
+
+      {/* ── Portfolio review ── */}
+      <div className="dash-section">
+        <div className="section-label" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>Portfolio review</span>
+          {reviewStale && (
+            <span
+              className="health-chip watching"
+              title="Live concentration or the reviewed set has drifted since this review was last projected. Use Refresh to reproject."
+            >
+              drifted since last projection
+            </span>
+          )}
+        </div>
+        <div className="two-col">
+          <div className="card">
+            <div className="card-title">Positions under pressure</div>
+            {pressure.length === 0 ? (
+              <div className="empty-note">No held positions need review.</div>
+            ) : (
+              pressure.map((item) => (
+                <ReviewRow key={item.id} item={item} onRespond={onRespond} busyId={busyItemId} />
+              ))
+            )}
+          </div>
+          <div className="card">
+            <div className="card-title">Constitution-fit opportunities</div>
+            {opportunities.length === 0 ? (
+              <div className="empty-note">No constitution-fit opportunities surfaced.</div>
+            ) : (
+              opportunities.map((item) => (
+                <ReviewRow key={item.id} item={item} onRespond={onRespond} busyId={busyItemId} />
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Attention ── */}
+      <div className="dash-section">
+        <div className="section-label">
+          Attention{needsAttention.length > 0 ? ` · ${needsAttention.length}` : ''}
+        </div>
+        {needsAttention.length === 0 ? (
+          <div className="empty-note">Nothing needs attention.</div>
+        ) : (
+          needsAttention.map((item) => (
+            <AttentionCard key={item.id} item={item} onRespond={onRespond} busyId={busyItemId} />
+          ))
+        )}
+      </div>
+
+      {/* ── Recent activity ── */}
+      <div className="dash-section">
+        <div className="section-label">Recent activity</div>
+        <Activity rows={activity} />
+      </div>
     </div>
   );
 }

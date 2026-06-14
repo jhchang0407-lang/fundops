@@ -1,217 +1,200 @@
 # FundOps
 
-Personal investment research platform powered by AI agents. Run your own hedge fund operations — from screening thousands of stocks to generating deep-dive memos — all from a single dashboard.
+A local, AI-native investment operations workspace for one individual investor. FundOps turns
+plain-English strategy into a versioned Constitution, runs a durable research pipeline over
+retained market data, keeps source-backed evidence for every claim, and routes decisions back to
+you in an Inbox — without ever delegating the investment decision to software.
 
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Python](https://img.shields.io/badge/python-3.12+-blue)
 ![React](https://img.shields.io/badge/react-19-blue)
 
-![FundOps Screener](docs/assets/screener.jpg)
+## Screenshots
+
+| Home command surface | Durable workflow runs |
+|---|---|
+| ![FundOps Home command surface](docs/assets/screenshots/home-command-surface.png) | ![FundOps durable workflow runs](docs/assets/screenshots/workflow-runs.png) |
+
+| Markets research hub | Operations settings |
+|---|---|
+| ![FundOps Markets research hub](docs/assets/screenshots/markets-research.png) | ![FundOps Operations settings](docs/assets/screenshots/operations-settings.png) |
+
+| Screener results | Example investment memo |
+|---|---|
+| ![FundOps Screener results](docs/assets/screenshots/screener-results.png) | ![FundOps example investment memo](docs/assets/screenshots/example-memo.png) |
+
+| Company page workflow map | Market output dashboard |
+|---|---|
+| ![FundOps Company page workflow map](docs/assets/screenshots/company-page-adbe.png) | ![FundOps semiconductor market output dashboard](docs/assets/screenshots/market-output-semiconductors.png) |
 
 ## What is this?
 
-FundOps runs a 7-agent pipeline that mirrors how a real investment fund operates:
+FundOps is an investment learning partner, not an autonomous fund manager. The AI helps you
+articulate strategy, write evidence-backed research artifacts, explain what changed, and propose
+reviewable improvements. Strategy activation, candidate promotion, memo selection, and portfolio
+actions stay yours, made through explicit approvals.
+
+The core loop:
 
 ```
-Screener → Thesis → IC Review → Memo → Library
-                                        ↕
-                              Portfolio + Allocator
+Home Chat ──► Constitution (versioned criteria, deterministic wiring)
+                  │
+                  ▼
+       Runs: Screener ─► Thesis ─► IC Review ─► Investment Memo
+                  │                         │
+                  ├──── evidence + artifacts┤
+                  ▼                         ▼
+        Markets / Company Pages       Thesis Health
+                  │                         │
+                  └──── Portfolio + Learning ────► Inbox
 ```
 
-| Agent | What it does |
-|-------|-------------|
-| **Screener** | Scores a universe of stocks against your strategy. Supports S&P 500, Nasdaq 100, Russell 2000, or custom ticker lists. |
-| **Thesis** | Generates a quick investment thesis with web research, SEC filings analysis, and independent valuation. |
-| **IC Review** | Stress-tests the thesis with configurable haircuts and hurdle rates. Only investments that survive the bear case pass. |
-| **Memo** | Full deep-dive research report and strategy-tailored investment memo. |
-| **Library** | Stores all research artifacts, runs the learning loop (checks prediction accuracy vs actuals), and enables "Ask the Library" search. |
-| **Portfolio** | Monitors held positions: live P&L, thesis health checks against SEC data, and news-based drift detection. |
-| **Allocator** | Position sizing recommendations, concentration alerts, and buy/trim/exit action items. |
+| Surface | What it does |
+|---------|-------------|
+| **Home** | The command surface: daily briefing, strategy chat, archive Q&A, data questions, slash commands, and the always-available conversation drawer. |
+| **Inbox** | The unresolved decision queue: pending Constitution approvals, portfolio pressure, Constitution-fit opportunities, thesis breaks, learning recommendations, and visible operational failures. |
+| **Runs** | Durable stage map for Screener → Thesis → IC Review → Memo. Each stage can run independently, resume, fail visibly, and hand off explicit selections downstream. |
+| **Markets** | Sector, industry, watchlist, and thematic research over retained local data, with bounded cited AI research runs when you ask for deeper work. |
+| **Screener** | Deterministically applies your Constitution's screening requirements to the active universe and ranks survivors by your approved blend. |
+| **Thesis** | One-page AI-written opportunity arguments with explicit return-source decomposition, ranked by return profile for IC Review. |
+| **IC Review** | The memo-worthiness gate: hard hurdles first, then a scored blend of conviction, Constitution fit, and data quality. You can override either way. |
+| **Memo** | Structured seven-section Investment Memos plus a separate machine-checkable monitoring plan. |
+| **Company Page** | Read-only ticker dossier: workflow history map, retained financials, filings/events, ownership evidence, artifacts, and memo-backed thesis health. |
+| **Library** | Ticker-first archive lookup plus retained conversation history; opens the Company Page for any ticker FundOps has retained history on. |
+| **Portfolio** | Ledger-first: purchase lots and sales in, holdings and realized/unrealized P&L projected out. Held positions can queue memo-backed thesis coverage. |
+| **Settings** | Operations only: providers, models, usage records, sync status, data export, and destructive resets. Strategy never lives here. |
 
-Each agent has exactly one job with no overlap. The pipeline processes top 20 screened candidates through thesis, sends the best 10 to IC review, and generates memos for those that pass.
-
-## Screenshots
-
-The platform includes: AI Strategy Chat, Screener, Research Pipeline, Ticker Detail, Portfolio Monitor, Library, Allocator, and Settings pages.
+Everything generated is a structured, versioned, source-linked artifact tied to the exact
+Constitution version, evidence bundle, and model steps that produced it.
 
 ## Installation
 
-### Prerequisites
-
-- **Python 3.12+** and **Node.js 18+**
-
-### Quick Start
+**Prerequisites:** Python 3.12+, Node.js 18+
 
 ```bash
 git clone https://github.com/jhchang0407-lang/fundops.git
 cd fundops
-npm install        # sets up everything — Python venv, backend, frontend
+npm install        # sets up Python venv + backend + frontend
 npm start          # → http://localhost:8000
 ```
 
-Open **http://localhost:8000**, go to **Settings**, and paste your OpenAI API key. That's it.
+### AI providers
 
-## Getting Started
+FundOps can run its model work three ways:
 
-### 1. Define your strategy
+- **OpenAI API** — set `OPENAI_API_KEY` in your environment for direct API access.
+- **Your coding agent (Claude Code / Codex)** — point FundOps at the coding-agent CLI you
+  already subscribe to, in Settings → Connected services. No API key needed; FundOps invokes
+  the CLI headlessly and only when you explicitly choose it.
+- **Offline stub** — with neither configured, FundOps runs in a deterministic offline mode
+  (clearly marked in provenance) so you can explore the full workflow shape first.
 
-Go to **Chat** and describe your investment approach in plain English:
+## Getting started
 
-> "I'm a deep value investor. I look for small-cap stocks trading at big discounts with recovering margins. Gross margin > 25%, debt/equity < 2. Russell 2000 universe. 3-5 year hold."
+1. **Describe your strategy in Chat** — e.g. *"Quality compounders at reasonable prices:
+   ROIC above 15%, gross margin above 40%, low debt. Rank by FCF yield. Only memo-worthy
+   ideas with 15%+ expected return."* FundOps drafts a Constitution: exact rules, plain-English
+   interpretations, and a preview of how each workflow gets wired. Nothing activates until you
+   approve.
+2. **Run the workflow** — Screener → Thesis → IC Review → Memo, stage by stage or as one
+   pipeline run. Promote/dismiss candidates at every stage; your selections are remembered as
+   learning signals, never as silent rule changes.
+3. **Enter your holdings** — purchase lots and sales. FundOps projects P&L from the ledger and
+   queues memo-backed thesis coverage for anything you hold.
+4. **Watch the Inbox** — thesis breaks, portfolio pressure, Constitution-fit opportunities,
+   and learning recommendations arrive as reviewable, evidence-first items.
 
-The AI will configure all agents to match your strategy. Say "just save it" when you're ready — no need to answer 10 questions.
+## Data sources
 
-### 3. Run the pipeline
+FundOps is bulk-first: breadth data arrives as official bulk products, downloaded once and kept
+current with tiny daily index ticks. Live APIs are reserved for on-demand research — full filing
+text for memos, fresh quotes during interactive runs.
 
-Click **Run Pipeline** in the sidebar. The pipeline will:
-- Screen the Russell 2000 (or your chosen universe) → top 20 candidates
-- Generate thesis for each → ranked by expected return
-- IC review the top 10 → stress-test with bear case
-- Generate memos for stocks that pass IC
-- Archive everything to the Library
+| Source | Cost | Role |
+|--------|------|------|
+| **SEC `companyfacts.zip`** | Free | Reported fundamentals for the whole universe — one bootstrap download, refreshed weekly or on demand |
+| **SEC daily index files** | Free | ~1–3 MB/day filing detection: who filed drives fact top-ups and thesis-health recalcs for exactly the affected tickers |
+| **SEC quarterly ownership data sets** | Free | Insider transaction evidence for known entities |
+| **Yahoo Finance (batched)** | Free | Price history for the universe, downloaded in batches; daily price updates ride the same sync tick |
+| **OpenAI / your coding agent** | Usage-based or your existing subscription | Thesis/IC/memo writing, strategy interpretation. Tiered models (cheap for extraction, strong for deep work); every call is recorded as an AI Usage Record |
 
-### 4. Review results
+FundOps is built for sometimes-on use: on launch it catches up everything since your last
+session (index files sync from the last recorded day, then targeted top-ups for exactly the
+tickers that filed while you were away). To stay current even on days you don't open the app,
+schedule a headless sync with your OS:
 
-- **Screener** — all scored stocks with fundamentals
-- **Research** — thesis results, IC verdicts, approved stocks ready for memos
-- **Portfolio** — add positions, track P&L, monitor thesis health
-- **Library** — search your research archive, ask questions about any ticker
+```bash
+npm run sync                       # catch-up tick now (bootstraps on first run)
+# cron example — weekdays at 6:30pm:
+# 30 18 * * 1-5  cd ~/Repos/fundops && npm run sync
+```
 
-## Data Sources
+Ownership evidence comes from the same pipeline: insider transactions (Forms 3/4/5 quarterly
+data sets) and largest 5%+ holders (Schedule 13D/G filings, parsed from their structured XML).
+S-3/S-4 registration statements are retained as dilution/M&A events in the filings index.
 
-| Source | Cost | What it provides |
-|--------|------|-----------------|
-| **Yahoo Finance** | Free | Stock quotes, P/E, margins, sector data |
-| **SEC EDGAR** | Free | 10-K/10-Q filings, financial statements, ratios |
-| **OpenAI** | ~$0.01-0.50/pipeline run | AI reasoning for thesis, IC review, memo generation |
-| **FMP** | Optional (paid) | Analyst estimates, earnings surprises, price targets |
-
-Yahoo Finance + SEC EDGAR provide complete fundamental data for free.
-
-## Stock Universes
-
-| Universe | Stocks | Description |
-|----------|--------|-------------|
-| `starter_30` | 30 | Top 30 US large caps — quick testing |
-| `nasdaq100` | 101 | Nasdaq 100 — tech-heavy |
-| `us_largecap_200` | 207 | Top 200 US by market cap |
-| `sp500` | 503 | Full S&P 500 |
-| `sp500_nasdaq100` | 517 | Combined S&P 500 + Nasdaq 100 |
-| `russell2000` | 1,906 | Russell 2000 small-cap index |
-
-You can also paste a custom ticker list in the Strategy Chat or Settings.
+The one-time bootstrap downloads ~2–3 GB; after that, daily ticks are ~1–3 MB. Total storage
+footprint is roughly 3–5 GB at Russell 2000 scope (raw bulk cache + workspace database).
 
 ## Architecture
 
 ```
-fundops/
-├── backend/
-│   ├── agents/           # 7 AI agents (screener, thesis, IC, memo, library, portfolio, allocator)
-│   ├── api/              # FastAPI REST API + background scheduler
-│   │   ├── routes/       # Endpoint handlers
-│   │   ├── deps.py       # Dependency injection (DB, LLM, connectors)
-│   │   └── jobs.py       # Background job queue
-│   ├── connectors/       # Data providers (FMP, SEC EDGAR, yfinance)
-│   ├── core/             # Config, database (SQLite), LLM client, data quality
-│   ├── scoring/          # AI-generated scoring code (strategy → Python)
-│   ├── learning/         # Feedback loops, outcome tracking, drift detection
-│   └── data/universes/   # Bundled ticker lists (S&P 500, Russell 2000, etc.)
-├── frontend/
-│   ├── src/
-│   │   ├── pages/        # React pages (Chat, Screener, Research, Portfolio, etc.)
-│   │   ├── components/   # Shared UI components
-│   │   ├── api/          # API client
-│   │   └── utils/        # Formatting utilities
-│   └── e2e/              # Playwright E2E tests
-├── config/
-│   └── workflow.yaml     # Default pipeline configuration
-├── tests/                # 150+ backend tests (contracts, agents, scoring, flows)
-└── fundops.db            # SQLite database (auto-created)
+backend/
+├── core/        # workspace DB + migrations, AI gateway (tiered, recorded, stubbed offline), config
+├── domain/      # pure deterministic logic: criteria, guardrails, wiring, IC gate math,
+│                # thesis-health evaluation, ledger math, artifact contracts, metric catalog
+├── stores/      # platform stores — the ONLY write path to the workspace database
+├── services/    # application services: market data, portfolio, inbox projection, strategy
+│   └── ingest/  # bulk-first ingestion: SEC companyfacts + daily indexes + ownership, batched prices
+├── workflows/   # durable workflow runs: screener, thesis, ic_review, memo, thesis_health,
+│                # learning, pipeline
+├── chat/        # FundOps Chat: strategy chat + archive Q&A
+├── connectors/  # SEC EDGAR + Yahoo Finance adapters
+└── api/         # thin FastAPI route adapters + SPA serving
+frontend/src/    # React 19 + TS: Home, Inbox, Runs, Markets, workflow pages, Company Page,
+                 # Library, Portfolio, Settings, Artifact Reader — custom app design system
+tests/platform/  # backend invariants: ledger math, guardrails, IC scoring, thesis health,
+                 # workflow contracts, chat behaviors
 ```
 
-### Key Design Decisions
+Key invariants:
 
-- **Constitution as single source of truth** — your strategy settings live in one place (the `constitution` table). Scoring code, screener filters, IC hurdles all derive from it.
-- **All financial data as 0-1 decimals** — margins, yields, growth rates stored consistently. Frontend always multiplies by 100 for display. No heuristic guessing.
-- **Pipeline limits** — Screener → top 20 thesis → top 10 IC → memos for PASS only. Prevents runaway API costs.
-- **In-memory scheduler** — background task runner checks every 30 seconds. No external cron dependency. Schedules configured via Settings UI.
+- **One workspace, one owner, one active Constitution, one primary portfolio.** Constitution
+  versions are immutable; activation requires an explicitly accepted proposal that passed
+  deterministic guardrails.
+- **Reported facts ≠ calculated observations.** Both are retained with lineage; corrections
+  supersede rather than overwrite; every calculated value records the metric-catalog version.
+- **Artifacts are append-only.** Historical outputs are never edited in place — new versions
+  supersede, and every artifact records its evidence bundle and Constitution version.
+- **Projections are rebuildable.** Holdings, inbox items, library lookups, and latest
+  financials are derived views over retained records, never independent truth.
+- **Operational failure ≠ investment judgment.** Retries and failures stay visible as
+  operational state; they never become verdicts or learning evidence.
 
-## Scheduled Agents
+Product truth lives in [CONTEXT.md](CONTEXT.md), [docs/adr/](docs/adr/), and
+[docs/implementation-map.md](docs/implementation-map.md).
 
-Configure in **Settings → Schedule**:
-
-| Agent | Default | What it does |
-|-------|---------|-------------|
-| **Full Pipeline** | Weekly (Sun 9 AM) | Complete run: screen → thesis → IC → memo → library |
-| **Portfolio Monitor** | Daily (7 AM) | Refresh prices, check thesis health, generate alerts |
-| **Allocator** | Weekly (Sun 12 PM) | Position sizing and action recommendations |
-| **Library Sync** | Weekly (Mon 6 AM) | Ingest new research artifacts into searchable archive |
-
-The scheduler runs inside the FastAPI process. If the server isn't running at the scheduled time, the task is skipped (no catch-up). Check scheduler status at `/api/scheduler/status`.
-
-## Strategy Conversation
-
-The AI chat configures all agents from a single conversation. You can:
-
-- **Set up a new strategy** — describe your approach, the AI creates a complete constitution
-- **Tune individual agents** — "set gross margin to 50%", "lower the IC bear hurdle to 12%"
-- **Change the universe** — "switch to Russell 2000", "use only tech stocks"
-- **Ask questions** — "what would happen if I removed the debt filter?"
-
-Changes persist to the constitution database immediately. Scoring code is regenerated synchronously so the screener uses your latest rules on the next run.
-
-## Tests
+## Development
 
 ```bash
-# All backend tests
-.venv/bin/pytest
-
-# Specific test suites
-.venv/bin/pytest tests/contracts/          # Data flow contracts
-.venv/bin/pytest tests/agents/             # Agent behavior tests
-.venv/bin/pytest tests/scoring/            # Scoring code generation
-
-# Frontend type checking
-cd frontend && npx tsc --noEmit
+npm test                                          # backend tests + frontend typecheck
+.venv/bin/python -m pytest tests/platform -q      # backend platform tests only
+cd frontend && npm run dev                        # frontend dev server with API proxy
+cd frontend && npm run build                      # production build
 ```
 
-## API Endpoints
-
-Core endpoints (all prefixed with `/api`):
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/pipeline/run` | Run full pipeline (screener → thesis → IC → memo) |
-| `POST` | `/screener/run` | Run screener only |
-| `POST` | `/thesis/{ticker}` | Generate thesis for a ticker |
-| `POST` | `/ic-review/{ticker}` | Run IC review for a ticker |
-| `POST` | `/portfolio/run` | Refresh portfolio (prices, P&L, thesis health) |
-| `POST` | `/allocator/run` | Run allocator recommendations |
-| `POST` | `/library/sync` | Sync research artifacts to library |
-| `GET` | `/scheduler/status` | Check scheduler state and next run times |
-| `GET` | `/screener/v2/results` | Latest screener results |
-| `GET` | `/thesis` | All thesis results (scoped to current pipeline) |
-| `GET` | `/ic-review` | All IC reviews (scoped to current pipeline) |
-| `GET` | `/research/approved` | IC-passed stocks ready for memos |
-| `GET` | `/portfolio` | Current holdings and P&L |
-| `GET` | `/review/{ticker}` | Full review data for a ticker |
-| `POST` | `/strategy/conversation` | AI strategy chat |
-
-## Environment Variables
+## Environment variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `OPENAI_API_KEY` | No | OpenAI API key — can also be set in Settings UI |
-| `FMP_API_KEY` | No | Financial Modeling Prep key (premium data) |
-| `SEC_USER_AGENT` | No | SEC EDGAR user agent string (good practice) |
-
-## Contributing
-
-1. Fork the repo
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Run tests (`pytest && cd frontend && npx tsc --noEmit`)
-4. Open a PR
+| `OPENAI_API_KEY` | No | Enables AI generation (offline stub mode without it) |
+| `FUNDOPS_DB` | No | Workspace database path (default `~/.fundops/workspace.db`) |
+| `FUNDOPS_CONFIG` | No | Operational config path (default `~/.fundops/config.yaml`) |
+| `FUNDOPS_CACHE` | No | Bulk data cache directory (default `~/.fundops/cache`) |
+| `FUNDOPS_SECRETS` | No | Credentials file path (default `~/.fundops/credentials.yaml`) |
+| `FUNDOPS_AI_PROVIDER` | No | Override the AI provider: `openai` \| `agent_cli` \| `stub` |
+| `SEC_USER_AGENT` | No | User-Agent for SEC EDGAR requests, per SEC fair-use policy |
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT

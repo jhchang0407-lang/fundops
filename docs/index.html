@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>FundOps — Personal Investment Research Platform</title>
-  <meta name="description" content="AI-powered investment research platform. Screen thousands of stocks, generate investment theses, stress-test with IC review, and monitor your portfolio — all from a single dashboard.">
-  <meta property="og:title" content="FundOps — Personal Investment Research Platform">
-  <meta property="og:description" content="Run your own hedge fund operations with AI agents that screen, analyze, stress-test, and monitor positions.">
+  <title>FundOps — AI-Native Investment Operations Workspace</title>
+  <meta name="description" content="A local, AI-native investment operations workspace for one investor. Define strategy in conversation, run durable research workflows, browse retained market data, and route reviewable decisions into an Inbox.">
+  <meta property="og:title" content="FundOps — AI-Native Investment Operations Workspace">
+  <meta property="og:description" content="Define strategy in conversation, run durable research workflows, browse retained market data, and monitor thesis health — without delegating the investment decision to software.">
   <meta property="og:type" content="website">
   <meta property="og:image" content="assets/og-image.png">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>F</text></svg>">
@@ -106,57 +106,6 @@
     }
     .btn-secondary:hover { border-color: var(--accent); }
 
-    /* Screenshot showcase */
-    .screenshot-section {
-      max-width: 1100px;
-      margin: 0 auto 80px;
-      padding: 0 20px;
-    }
-    .screenshot-tabs {
-      display: flex;
-      gap: 4px;
-      margin-bottom: 16px;
-      overflow-x: auto;
-      padding-bottom: 4px;
-    }
-    .screenshot-tab {
-      font-family: var(--font-mono);
-      font-size: 0.75rem;
-      padding: 6px 14px;
-      border-radius: 6px;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      color: var(--text-muted);
-      cursor: pointer;
-      white-space: nowrap;
-      transition: all 0.15s;
-    }
-    .screenshot-tab:hover { border-color: var(--accent); color: var(--text); }
-    .screenshot-tab.active {
-      background: var(--accent);
-      color: #000;
-      border-color: var(--accent);
-      font-weight: 600;
-    }
-    .screenshot-frame {
-      border-radius: 12px;
-      border: 1px solid var(--border);
-      overflow: hidden;
-      background: var(--bg-card);
-    }
-    .screenshot-frame img {
-      width: 100%;
-      display: block;
-    }
-    .screenshot-frame .placeholder {
-      aspect-ratio: 16/10;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: var(--text-muted);
-      font-size: 0.875rem;
-    }
-
     /* Pipeline section */
     .pipeline-section {
       max-width: 1100px;
@@ -200,6 +149,37 @@
     }
     .pipeline-node.active { border-color: var(--accent); color: var(--accent); }
     .pipeline-arrow { color: var(--text-muted); font-size: 1.2rem; }
+
+    /* Screenshots */
+    .screenshots-section {
+      max-width: 1120px;
+      margin: 0 auto 80px;
+      padding: 0 20px;
+    }
+    .screenshot-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+    .screenshot-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+    }
+    .screenshot-card img {
+      display: block;
+      width: 100%;
+      height: auto;
+      background: #e8e2d7;
+    }
+    .screenshot-caption {
+      padding: 12px 14px;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      border-top: 1px solid var(--border);
+    }
 
     /* Agent cards */
     .agent-grid {
@@ -332,6 +312,7 @@
       .hero h1 { font-size: 2.2rem; }
       .hero p { font-size: 1rem; }
       .pipeline-flow { justify-content: flex-start; }
+      .screenshot-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -339,9 +320,9 @@
 
 <!-- Hero -->
 <section class="hero">
-  <div class="hero-badge">Open Source</div>
+  <div class="hero-badge">Open Source &middot; Public Beta</div>
   <h1><span>FundOps</span></h1>
-  <p>Personal investment research platform powered by AI agents. Screen thousands of stocks, generate theses, stress-test with IC review, and monitor your portfolio.</p>
+  <p>A local, AI-native investment operations workspace for one investor. Define your strategy in conversation, run durable research workflows, browse retained market data, and route reviewable decisions into an Inbox — without ever delegating the decision to software.</p>
   <div class="hero-buttons">
     <a href="https://github.com/jhchang0407-lang/fundops" class="btn btn-primary">
       View on GitHub
@@ -352,71 +333,115 @@
   </div>
 </section>
 
-<!-- Screenshot showcase -->
-<section class="screenshot-section">
-  <div class="screenshot-tabs" id="screenshotTabs">
-    <button class="screenshot-tab active" data-img="screener">Screener</button>
-    <button class="screenshot-tab" data-img="research">Research</button>
-    <button class="screenshot-tab" data-img="ticker">Ticker Detail</button>
-    <button class="screenshot-tab" data-img="portfolio">Portfolio</button>
-    <button class="screenshot-tab" data-img="chat">AI Chat</button>
-    <button class="screenshot-tab" data-img="settings">Settings</button>
-  </div>
-  <div class="screenshot-frame">
-    <img id="screenshotImg" src="assets/screener.jpg" alt="FundOps Screener">
+<!-- Screenshots -->
+<section class="screenshots-section">
+  <div class="section-label">Current product</div>
+  <h2 class="section-title">A working local investment desk</h2>
+  <p class="section-desc">FundOps is a real workspace: Home for briefing and chat, Runs for the research pipeline, Screener and Memo workbenches for concrete output, Markets for retained sector work, and Company pages for ticker dossiers.</p>
+  <div class="screenshot-grid">
+    <div class="screenshot-card">
+      <img src="assets/screenshots/home-command-surface.png" alt="FundOps Home command surface with briefing, chat, and now panel">
+      <div class="screenshot-caption">Home combines briefing, strategy chat, archive Q&amp;A, data questions, and slash commands.</div>
+    </div>
+    <div class="screenshot-card">
+      <img src="assets/screenshots/workflow-runs.png" alt="FundOps Runs page with Screener, Thesis, IC review, and Memo stages">
+      <div class="screenshot-caption">Runs keeps each stage durable, resumable, and explicit about handoffs and failures.</div>
+    </div>
+    <div class="screenshot-card">
+      <img src="assets/screenshots/markets-research.png" alt="FundOps Markets page with sector browser and thematic research input">
+      <div class="screenshot-caption">Markets supports sector, industry, watchlist, and thematic research over retained local data.</div>
+    </div>
+    <div class="screenshot-card">
+      <img src="assets/screenshots/operations-settings.png" alt="FundOps Settings page with market data status and AI provider controls">
+      <div class="screenshot-caption">Settings is operational: sync status, provider choice, usage records, export, and reset controls.</div>
+    </div>
+    <div class="screenshot-card">
+      <img src="assets/screenshots/screener-results.png" alt="FundOps Screener results table with top picks">
+      <div class="screenshot-caption">Screener results show the active universe, pass count, and top picks handed to downstream stages.</div>
+    </div>
+    <div class="screenshot-card">
+      <img src="assets/screenshots/example-memo.png" alt="FundOps example investment memo artifact">
+      <div class="screenshot-caption">Memo artifacts are retained, sectioned, read-only, exportable, and grounded in the run that produced them.</div>
+    </div>
+    <div class="screenshot-card">
+      <img src="assets/screenshots/company-page-adbe.png" alt="FundOps Company page workflow map for Adobe">
+      <div class="screenshot-caption">Company pages collect a ticker's workflow history, financials, thesis health, ownership, events, peers, and research.</div>
+    </div>
+    <div class="screenshot-card">
+      <img src="assets/screenshots/market-output-semiconductors.png" alt="FundOps Markets output dashboard for semiconductors">
+      <div class="screenshot-caption">Market output aggregates retained local data into industry KPIs, charts, research launchers, and company tables.</div>
+    </div>
   </div>
 </section>
 
-<!-- Pipeline -->
+<!-- Core loop -->
 <section class="pipeline-section">
   <div class="section-label">How it works</div>
-  <h2 class="section-title">7-Agent Pipeline</h2>
-  <p class="section-desc">Modeled after a real hedge fund. Each agent has exactly one job. The pipeline processes top 20 screened candidates through thesis, sends the best 10 to IC review, and generates memos for those that pass.</p>
+  <h2 class="section-title">Strategy in, evidence-backed operations out</h2>
+  <p class="section-desc">Describe your strategy in plain English and approve the resulting Constitution — exact rules, typed criteria, deterministic wiring. Home, Runs, Markets, Portfolio, and Inbox all read from that same source of truth, and everything generated is a versioned, source-linked artifact.</p>
 
   <div class="pipeline-flow">
-    <div class="pipeline-node active">Screener</div>
+    <div class="pipeline-node active">Strategy Chat</div>
+    <span class="pipeline-arrow">&rarr;</span>
+    <div class="pipeline-node active">Constitution</div>
+    <span class="pipeline-arrow">&rarr;</span>
+    <div class="pipeline-node">Screener</div>
     <span class="pipeline-arrow">&rarr;</span>
     <div class="pipeline-node">Thesis</div>
     <span class="pipeline-arrow">&rarr;</span>
     <div class="pipeline-node">IC Review</div>
     <span class="pipeline-arrow">&rarr;</span>
     <div class="pipeline-node">Memo</div>
-    <span class="pipeline-arrow">&rarr;</span>
-    <div class="pipeline-node">Library</div>
     <span class="pipeline-arrow" style="margin: 0 12px;">|</span>
-    <div class="pipeline-node">Portfolio</div>
-    <span class="pipeline-arrow">+</span>
-    <div class="pipeline-node">Allocator</div>
+    <div class="pipeline-node">Thesis Health</div>
+    <span class="pipeline-arrow">&rarr;</span>
+    <div class="pipeline-node">Inbox</div>
   </div>
 
   <div class="agent-grid">
     <div class="agent-card">
+      <h3><span class="tag">HM</span> Home</h3>
+      <p>The command surface. Strategy Chat turns plain-English strategy into a reviewable Constitution proposal; Archive Q&amp;A and data questions answer from retained records with citations.</p>
+    </div>
+    <div class="agent-card">
+      <h3><span class="tag">RN</span> Runs</h3>
+      <p>A durable stage map for Screener, Thesis, IC Review, and Memo. Stages run independently, resume, fail visibly, and hand off explicit selections downstream.</p>
+    </div>
+    <div class="agent-card">
+      <h3><span class="tag">MK</span> Markets</h3>
+      <p>Sector, industry, watchlist, and thematic research over retained local data, with bounded cited AI research runs when you need deeper work.</p>
+    </div>
+    <div class="agent-card">
       <h3><span class="tag">SC</span> Screener</h3>
-      <p>Scores a universe of stocks against your strategy. Supports S&P 500, Nasdaq 100, Russell 2000, or custom ticker lists.</p>
+      <p>Deterministically applies your Constitution's screening requirements to a universe (Russell 2000 by default) and ranks survivors by your approved blend. Top picks hand off to Thesis.</p>
     </div>
     <div class="agent-card">
       <h3><span class="tag">TH</span> Thesis</h3>
-      <p>Generates investment thesis with web research, SEC filings analysis, and independent valuation for top 20 candidates.</p>
+      <p>One-page AI-written opportunity arguments with explicit return-source decomposition, grounded in retained SEC evidence and ranked for IC Review.</p>
     </div>
     <div class="agent-card">
       <h3><span class="tag">IC</span> IC Review</h3>
-      <p>Stress-tests each thesis with configurable haircuts and hurdle rates. Only investments that survive the bear case pass.</p>
+      <p>The memo-worthiness gate: hard hurdles first, then a scored blend of conviction, Constitution fit, and data quality. You can override either way — overrides are recorded.</p>
     </div>
     <div class="agent-card">
       <h3><span class="tag">MM</span> Memo</h3>
-      <p>Full deep-dive research report and strategy-tailored investment memo for IC-passed stocks.</p>
+      <p>Structured seven-section Investment Memos with a fixed outline, comparable across companies, plus a separate machine-checkable monitoring plan.</p>
     </div>
     <div class="agent-card">
-      <h3><span class="tag">LB</span> Library</h3>
-      <p>Stores all research artifacts, runs the learning loop (checks prediction accuracy vs actuals), and enables natural language search across your archive.</p>
+      <h3><span class="tag">IN</span> Inbox</h3>
+      <p>An unresolved attention and decision queue: pending approvals, positions under pressure, Constitution-fit opportunities, thesis breaks, failures. Not an activity feed.</p>
+    </div>
+    <div class="agent-card">
+      <h3><span class="tag">CO</span> Company Page</h3>
+      <p>The read-only dossier per ticker: workflow history map, full financials, and memo-backed thesis health. The Library opens it for any ticker with retained history.</p>
     </div>
     <div class="agent-card">
       <h3><span class="tag">PF</span> Portfolio</h3>
-      <p>Monitors held positions: live P&L, thesis health checks against SEC data, and news-based drift detection.</p>
+      <p>Ledger-first: purchase lots and sales in, holdings and realized/unrealized P&amp;L projected out. Held positions automatically get memo-backed thesis coverage.</p>
     </div>
     <div class="agent-card">
-      <h3><span class="tag">AL</span> Allocator</h3>
-      <p>Position sizing recommendations, concentration alerts, and buy/trim/exit action items based on your constitution.</p>
+      <h3><span class="tag">OP</span> Settings</h3>
+      <p>Operations only: provider selection, model usage records, sync status, cache/export controls, and destructive resets. Strategy never lives here.</p>
     </div>
   </div>
 </section>
@@ -429,44 +454,44 @@
 
   <div class="feature-grid">
     <div class="feature">
-      <div class="feature-icon">&#x1f4ac;</div>
-      <h3>AI Strategy Chat</h3>
-      <p>Describe your investment approach in plain English. The AI configures all agents to match your strategy.</p>
+      <div class="feature-icon">&#x1f4dc;</div>
+      <h3>Strategy as a Constitution</h3>
+      <p>Plain-English strategy becomes versioned, typed criteria with deterministic wiring. Nothing activates without your explicit approval; versions are immutable.</p>
     </div>
     <div class="feature">
-      <div class="feature-icon">&#x1f4ca;</div>
-      <h3>Free Data</h3>
-      <p>Yahoo Finance + SEC EDGAR provide complete fundamental data at no cost. FMP adds premium data optionally.</p>
-    </div>
-    <div class="feature">
-      <div class="feature-icon">&#x1f50d;</div>
-      <h3>Web Research</h3>
-      <p>Thesis agent uses web search to find why a stock is cheap. Grounds analysis against SEC filings.</p>
-    </div>
-    <div class="feature">
-      <div class="feature-icon">&#x1f6e1;</div>
-      <h3>Bear Case Testing</h3>
-      <p>IC Review applies configurable haircuts to build bear cases. Only investments that work even when wrong survive.</p>
+      <div class="feature-icon">&#x1f50e;</div>
+      <h3>Evidence Before Synthesis</h3>
+      <p>Every material claim is grounded in retained, source-backed evidence or explicitly marked unsupported. Artifacts record the exact evidence bundle that produced them.</p>
     </div>
     <div class="feature">
       <div class="feature-icon">&#x1f4c8;</div>
       <h3>Thesis Health Monitoring</h3>
-      <p>Daily SEC data checks and weekly news monitoring flag when thesis assumptions breach.</p>
+      <p>Each memo ships a machine-checkable monitoring plan. Daily filing detection recalculates thesis health for exactly the tickers that filed.</p>
     </div>
     <div class="feature">
-      <div class="feature-icon">&#x26a1;</div>
-      <h3>One-Click Pipeline</h3>
-      <p>Run Pipeline button executes the full flow: Screen &rarr; Thesis &rarr; IC &rarr; Memo &rarr; Library in one click.</p>
+      <div class="feature-icon">&#x1f4d2;</div>
+      <h3>Ledger-First Portfolio</h3>
+      <p>Purchase lots and sales are the source of truth; holdings and P&amp;L are rebuildable projections. Held positions queue memo-backed thesis coverage.</p>
+    </div>
+    <div class="feature">
+      <div class="feature-icon">&#x1f4ca;</div>
+      <h3>Bulk-First Free Data</h3>
+      <p>SEC bulk products and batched Yahoo Finance prices cover the whole universe for free; daily ticks are ~1–3 MB. Live APIs are reserved for on-demand research.</p>
+    </div>
+    <div class="feature">
+      <div class="feature-icon">&#x1f916;</div>
+      <h3>Bring Your Own AI</h3>
+      <p>OpenAI API, the coding-agent CLI you already subscribe to (Claude Code / Codex), or a deterministic offline stub — every model call is recorded as an AI Usage Record.</p>
     </div>
     <div class="feature">
       <div class="feature-icon">&#x1f4d6;</div>
-      <h3>Research Library</h3>
-      <p>Every thesis, IC verdict, and memo is archived. Ask the Library questions in natural language.</p>
+      <h3>Append-Only Archive</h3>
+      <p>Artifacts are never edited in place — new versions supersede old ones. Archive Q&amp;A answers questions across your retained history with citations.</p>
     </div>
     <div class="feature">
       <div class="feature-icon">&#x2699;</div>
-      <h3>Configurable Schedules</h3>
-      <p>Set agents to run automatically: daily portfolio monitoring, weekly pipeline runs, on your schedule.</p>
+      <h3>Sometimes-On by Design</h3>
+      <p>On launch, FundOps catches up everything since your last session. A headless <code>npm run sync</code> keeps data current from cron on days you don't open the app.</p>
     </div>
   </div>
 </section>
@@ -475,31 +500,23 @@
 <section class="install-section">
   <div class="section-label">Get started</div>
   <h2 class="section-title">Install in 5 minutes</h2>
-  <p class="section-desc" style="margin-bottom: 24px;">Requires Python 3.12+ and Node.js 18+. Only an OpenAI API key is needed to start.</p>
+  <p class="section-desc" style="margin-bottom: 24px;">Requires Python 3.12+ and Node.js 18+. No API key needed to explore — without one, FundOps runs in a clearly-marked offline stub mode.</p>
 
   <div class="code-block">
-    <span class="comment"># Clone and setup</span><br>
     <span class="cmd">git clone https://github.com/jhchang0407-lang/fundops.git</span><br>
     <span class="cmd">cd fundops</span><br>
-    <span class="cmd">cp .env.example .env</span><br>
-    <span class="comment"># Add your OPENAI_API_KEY to .env</span><br><br>
-    <span class="comment"># Backend</span><br>
-    <span class="cmd">python3 -m venv .venv && source .venv/bin/activate</span><br>
-    <span class="cmd">pip install -e ".[dev]"</span><br><br>
-    <span class="comment"># Frontend</span><br>
-    <span class="cmd">cd frontend && npm install && cd ..</span><br><br>
-    <span class="comment"># Run</span><br>
-    <span class="cmd">uvicorn backend.api:app --reload --port 8000  <span class="comment"># Terminal 1</span></span><br>
-    <span class="cmd">cd frontend && npm run dev                   <span class="comment"># Terminal 2</span></span><br><br>
-    <span class="comment"># Open http://localhost:5173</span>
+    <span class="cmd">npm install</span>   <span class="comment"># sets up Python venv + backend + frontend</span><br>
+    <span class="cmd">npm start</span>     <span class="comment"># → http://localhost:8000</span><br><br>
+    <span class="comment"># AI providers: set OPENAI_API_KEY in your environment, or connect</span><br>
+    <span class="comment"># your coding-agent CLI in Settings → Connected services.</span>
   </div>
 </section>
 
 <!-- Data sources -->
 <section class="features-section">
   <div class="section-label">Data</div>
-  <h2 class="section-title">Free by default</h2>
-  <p class="section-desc" style="margin-bottom: 24px;">Yahoo Finance + SEC EDGAR cover the basics. No paid API required.</p>
+  <h2 class="section-title">Bulk-first, free by default</h2>
+  <p class="section-desc" style="margin-bottom: 24px;">Breadth data arrives as official bulk products — one bootstrap download (~2–3 GB), then ~1–3 MB daily ticks. No paid data API required.</p>
 
   <table class="data-table">
     <thead>
@@ -511,24 +528,29 @@
     </thead>
     <tbody>
       <tr>
-        <td><strong>Yahoo Finance</strong></td>
+        <td><strong>SEC companyfacts.zip</strong></td>
         <td><span class="badge-free">Free</span></td>
-        <td>Stock quotes, P/E, margins, sector data</td>
+        <td>Reported fundamentals for the whole universe, refreshed weekly or on demand</td>
       </tr>
       <tr>
-        <td><strong>SEC EDGAR</strong></td>
+        <td><strong>SEC daily index files</strong></td>
         <td><span class="badge-free">Free</span></td>
-        <td>10-K/10-Q filings, financial statements, ratios</td>
+        <td>Filing detection that drives targeted fact top-ups and thesis-health recalcs</td>
       </tr>
       <tr>
-        <td><strong>OpenAI</strong></td>
-        <td><span class="badge-optional">Pay-per-use</span></td>
-        <td>AI reasoning for thesis, IC review, memo generation</td>
+        <td><strong>SEC ownership data sets</strong></td>
+        <td><span class="badge-free">Free</span></td>
+        <td>Insider transactions (Forms 3/4/5) and 5%+ holders (Schedule 13D/G)</td>
       </tr>
       <tr>
-        <td><strong>FMP</strong></td>
+        <td><strong>Yahoo Finance (batched)</strong></td>
+        <td><span class="badge-free">Free</span></td>
+        <td>Price history for the universe; daily updates ride the sync tick</td>
+      </tr>
+      <tr>
+        <td><strong>OpenAI / your coding agent</strong></td>
         <td><span class="badge-optional">Optional</span></td>
-        <td>Analyst estimates, earnings surprises, price targets</td>
+        <td>Thesis, IC review, and memo writing — or run fully offline in stub mode</td>
       </tr>
     </tbody>
   </table>
@@ -542,29 +564,6 @@
     Built by <a href="https://github.com/jhchang0407-lang">Thomas Chang</a>
   </p>
 </footer>
-
-<script>
-  // Screenshot tab switcher
-  const tabs = document.querySelectorAll('.screenshot-tab');
-  const img = document.getElementById('screenshotImg');
-  const images = {
-    screener: 'assets/screener.jpg',
-    research: 'assets/research.jpg',
-    ticker: 'assets/ticker-detail.jpg',
-    portfolio: 'assets/portfolio.jpg',
-    chat: 'assets/chat.jpg',
-    settings: 'assets/settings.jpg',
-  };
-  tabs.forEach(tab => {
-    tab.addEventListener('click', () => {
-      tabs.forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      const key = tab.dataset.img;
-      img.src = images[key] || images.screener;
-      img.alt = 'FundOps ' + tab.textContent;
-    });
-  });
-</script>
 
 </body>
 </html>

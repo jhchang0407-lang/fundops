@@ -151,28 +151,28 @@ def get_sector_kpis(ticker: str, years: int = 5, sector_override: str | None = N
 
     kpis = {}
     if subsector == "banking":
-        from sec.sectors.banks import compute_bank_kpis
+        from .banks import compute_bank_kpis
         kpis = compute_bank_kpis(gaap, years)
     elif subsector == "insurance":
-        from sec.sectors.insurance import compute_insurance_kpis
+        from .insurance import compute_insurance_kpis
         kpis = compute_insurance_kpis(gaap, years)
     elif subsector == "reits":
-        from sec.sectors.reits import compute_reit_kpis
+        from .reits import compute_reit_kpis
         kpis = compute_reit_kpis(gaap, years)
     elif subsector == "tech":
-        from sec.sectors.tech import compute_tech_kpis
+        from .tech import compute_tech_kpis
         kpis = compute_tech_kpis(gaap, years)
     elif subsector == "retail":
-        from sec.sectors.retail import compute_retail_kpis
+        from .retail import compute_retail_kpis
         kpis = compute_retail_kpis(gaap, years)
     elif subsector == "energy":
-        from sec.sectors.energy import compute_energy_kpis
+        from .energy import compute_energy_kpis
         kpis = compute_energy_kpis(gaap, years)
     elif subsector == "healthcare":
-        from sec.sectors.healthcare import compute_healthcare_kpis
+        from .healthcare import compute_healthcare_kpis
         kpis = compute_healthcare_kpis(gaap, years)
     elif subsector == "industrials":
-        from sec.sectors.industrials import compute_industrial_kpis
+        from .industrials import compute_industrial_kpis
         kpis = compute_industrial_kpis(gaap, years)
 
     return {

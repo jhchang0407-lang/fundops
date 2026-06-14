@@ -1,138 +1,120 @@
-import { useState } from 'react';
 import { NavLink } from 'react-router-dom';
-import { api } from '../api/client';
-import { useRunningJobs } from './JobTracker';
+import { useQuery } from '@tanstack/react-query';
+import { getBriefing, getHealth, getStrategy } from '../api/client';
 
-type NavItem = { to: string; label: string; icon: string; end?: boolean };
+type NavItem = { to: string; label: string; end?: boolean; badge?: number };
 
-const navGroups: (NavItem[] | 'sep')[] = [
-  [
-    { to: '/', label: 'Chat', icon: 'AI', end: true },
-    { to: '/dashboard', label: 'Dashboard', icon: 'DB' },
-  ],
-  'sep',
-  [
-    { to: '/screener', label: 'Screener', icon: 'SC' },
-    { to: '/research', label: 'Research', icon: 'RS' },
-    { to: '/portfolio', label: 'Portfolio', icon: 'PF' },
-    { to: '/library', label: 'Library', icon: 'LB' },
-    { to: '/allocator', label: 'Allocator', icon: 'AL' },
-  ],
-  'sep',
-  [
-    { to: '/settings', label: 'Settings', icon: 'ST' },
-  ],
-];
+function linkClass({ isActive }: { isActive: boolean }) {
+  return `side-link${isActive ? ' active' : ''}`;
+}
 
-export function Sidebar() {
-  const runningJobs = useRunningJobs();
-  const pipelineRunning = runningJobs.some(j => j.agent === 'pipeline');
-  const [starting, setStarting] = useState(false);
+const PROVIDER_LABELS: Record<string, string> = {
+  agent_cli: 'claude · headless',
+  openai: 'OpenAI API',
+  stub: 'offline stub',
+};
 
-  const handleRunPipeline = async () => {
-    if (pipelineRunning || starting) return;
-    setStarting(true);
-    try {
-      await api.runPipeline();
-    } catch (e) {
-      console.error('Pipeline failed:', e);
-    } finally {
-      setTimeout(() => setStarting(false), 3000);
-    }
-  };
+export function Sidebar({ onOpenWiring, onOpenPalette }: {
+  onOpenWiring: () => void;
+  onOpenPalette: () => void;
+}) {
+  const { data: health } = useQuery({ queryKey: ['health'], queryFn: getHealth, staleTime: 60_000 });
+  const { data: strategy } = useQuery({ queryKey: ['strategy'], queryFn: getStrategy });
+  const { data: briefing } = useQuery({ queryKey: ['briefing'], queryFn: getBriefing, retry: 1 });
+
+  const inboxBadge =
+    (briefing?.learning_ready ?? 0) +
+    (briefing?.pending_proposal ? 1 : 0) +
+    (briefing?.health.broken.length ?? 0);
+  const runsBadge = briefing?.running.length ?? 0;
+
+  const nav: NavItem[] = [
+    { to: '/', label: 'Home', end: true },
+    { to: '/inbox', label: 'Inbox', badge: inboxBadge },
+    { to: '/runs', label: 'Runs', badge: runsBadge },
+    { to: '/markets', label: 'Markets' },
+    { to: '/portfolio', label: 'Portfolio' },
+    { to: '/library', label: 'Library' },
+  ];
+
+  const v = strategy?.active_version;
+  const providerKey = health?.ai_provider ?? (health?.ai_configured ? 'openai' : 'stub');
+  const providerLabel = PROVIDER_LABELS[providerKey] ?? providerKey;
+  const dotColor =
+    health === undefined ? 'var(--text-muted)' : health.ai_configured ? 'var(--teal)' : 'var(--amber)';
 
   return (
-    <nav style={{
-      width: 208,
-      background: 'linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0)), var(--bg-secondary)',
-      borderRight: '1px solid var(--border)',
-      display: 'flex',
-      flexDirection: 'column',
-      flexShrink: 0,
-      height: '100vh',
-      position: 'sticky',
-      top: 0,
-    }}>
-      <div style={{
-        padding: '18px 14px',
-        fontFamily: 'var(--font-data)',
-        fontSize: 'var(--text-lg)',
-        fontWeight: 600,
-        color: 'var(--accent)',
-        letterSpacing: '0.08em',
-        borderBottom: '1px solid var(--border)',
-      }}>
-        <div>FUNDOPS</div>
-        <div style={{ marginTop: 6, color: 'var(--text-muted)', fontSize: '10px' }}>
-          PERSONAL INVESTMENT OS
-        </div>
+    <nav className="sidebar">
+      <div className="sidebar-brand">
+        <span style={{ color: 'var(--teal)' }}>✦</span> FundOps
+        <div className="sidebar-brand-sub">Investment operations</div>
       </div>
-      <div style={{ flex: 1, padding: '8px 0', overflowY: 'auto' }}>
-        {navGroups.map((group, gi) =>
-          group === 'sep' ? (
-            <div key={`sep-${gi}`} style={{ height: 1, background: 'var(--border)', margin: '8px 14px' }} />
-          ) : (
-            group.map(item => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                style={({ isActive }) => ({
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  margin: '0 10px 4px',
-                  padding: '9px 10px',
-                  color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
-                  fontSize: 'var(--text-sm)',
-                  textDecoration: 'none',
-                  border: `1px solid ${isActive ? 'var(--accent-strong)' : 'transparent'}`,
-                  borderRadius: '8px',
-                  background: isActive ? 'rgba(245,166,35,0.08)' : 'transparent',
-                })}
-              >
-                <span style={{
-                  width: 26,
-                  height: 26,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  borderRadius: 6,
-                  background: 'rgba(255,255,255,0.04)',
-                  color: 'inherit',
-                  fontFamily: 'var(--font-data)',
-                  fontSize: '10px',
-                }}>
-                  {item.icon}
-                </span>
-                {item.label}
-              </NavLink>
-            ))
-          )
-        )}
+
+      <div className="sidebar-nav">
+        {nav.map((item) => (
+          <NavLink key={item.to} to={item.to} end={item.end} className={linkClass}>
+            {item.label}
+            {item.badge != null && item.badge > 0 && (
+              <span className="side-badge">{item.badge}</span>
+            )}
+          </NavLink>
+        ))}
       </div>
-      <div style={{ padding: 12, borderTop: '1px solid var(--border)' }}>
-        <button
-          className="btn btn-accent"
-          onClick={handleRunPipeline}
-          disabled={pipelineRunning || starting}
-          style={{
-            width: '100%',
-            padding: '10px 12px',
-            opacity: (pipelineRunning || starting) ? 0.8 : 1,
-          }}
-        >
-          {pipelineRunning ? '● Running...' : starting ? 'Starting...' : 'Run Pipeline'}
-        </button>
-        {runningJobs.length > 0 && (
-          <div style={{
-            marginTop: 6, fontSize: 'var(--text-xs)', color: 'var(--text-muted)',
-            textAlign: 'center',
-          }}>
-            {runningJobs.length} job{runningJobs.length !== 1 ? 's' : ''} active
+
+      <div className="sidebar-foot">
+        <button className="side-chip" onClick={onOpenWiring} title="How the Constitution wires each capability — read-only">
+          <div className="side-chip-label">Constitution</div>
+          <div className="side-chip-value">
+            {v ? `v${v.version_number}` : 'not set'}
+            {v?.style_blend
+              ? ` · ${Object.keys(v.style_blend).slice(0, 2).join('/')}`
+              : ''}
           </div>
-        )}
+          {strategy?.universe?.name && (
+            <div className="side-chip-sub">
+              {strategy.universe.name}
+              {strategy.universe.tickers_count != null ? ` · ${strategy.universe.tickers_count} names` : ''}
+            </div>
+          )}
+          {strategy?.pending_proposal && (
+            <div className="side-chip-sub" style={{ color: 'var(--purple-ink)' }}>draft pending</div>
+          )}
+        </button>
+
+        <NavLink to="/settings" className="side-chip" style={{ textDecoration: 'none' }}>
+          <div style={{ fontSize: 'var(--text-xs)' }}>
+            <span className="health-dot" style={{ background: dotColor }} /> {providerLabel}
+          </div>
+          <div className="side-chip-sub">Settings · usage · data</div>
+        </NavLink>
+
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            className="wiring-chip"
+            style={{ flex: 1, cursor: 'pointer', justifyContent: 'center' }}
+            aria-label="Toggle light or dark theme"
+            title="Toggle light/dark theme"
+            onClick={() => {
+              const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+              document.documentElement.dataset.theme = next;
+              localStorage.setItem('fundops.theme', next);
+            }}
+          >
+            theme
+          </button>
+          <button
+            className="wiring-chip"
+            style={{ flex: 1, cursor: 'pointer', justifyContent: 'center' }}
+            aria-label="Open command palette (Command-K)"
+            title="Open command palette (⌘K)"
+            onClick={onOpenPalette}
+          >
+            ⌘K
+          </button>
+        </div>
       </div>
     </nav>
   );
 }
+
+export default Sidebar;
