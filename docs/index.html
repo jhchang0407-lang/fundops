@@ -11,190 +11,293 @@
   <meta property="og:image" content="assets/og-image.png">
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>F</text></svg>">
   <style>
+    @import url('https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
     :root {
-      --bg: #0a0e17;
-      --bg-card: #111827;
-      --bg-card-hover: #1a2235;
-      --border: #1e293b;
-      --accent: #f59e0b;
-      --accent-hover: #d97706;
-      --text: #e2e8f0;
-      --text-muted: #94a3b8;
-      --positive: #22c55e;
-      --negative: #ef4444;
-      --font-display: 'Inter', -apple-system, sans-serif;
-      --font-mono: 'JetBrains Mono', 'SF Mono', monospace;
-    }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: var(--font-display);
-      background: var(--bg);
-      color: var(--text);
-      line-height: 1.6;
-      -webkit-font-smoothing: antialiased;
-    }
-    a { color: var(--accent); text-decoration: none; }
-    a:hover { color: var(--accent-hover); }
-    code {
-      font-family: var(--font-mono);
-      background: var(--bg-card);
-      padding: 2px 6px;
-      border-radius: 4px;
-      font-size: 0.875em;
+      --canvas: #ECE8DF;
+      --panel: #FFFFFF;
+      --well: #F2EFE8;
+      --hover: #E4DFD4;
+      --soft: #F6F4EE;
+      --hairline: rgba(40,35,26,.10);
+      --border: rgba(40,35,26,.14);
+      --text-primary: #262219;
+      --text-secondary: #5F5B52;
+      --text-muted: #8F8A7E;
+      --teal: #1D9E75;
+      --teal-bg: #E1F5EE;
+      --teal-ink: #0F6E56;
+      --purple-bg: #EEEDFE;
+      --purple-ink: #534AB7;
+      --amber-bg: #FAEEDA;
+      --amber-ink: #854F0B;
+      --blue-bg: #E6F1FB;
+      --blue-ink: #185FA5;
+      --sh1: 0 1px 2px rgba(35,30,22,.06), 0 4px 16px rgba(35,30,22,.08);
+      --sh2: 0 14px 40px rgba(35,30,22,.18);
+      --font-display: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-data: 'JetBrains Mono', 'SF Mono', monospace;
     }
 
-    /* Hero */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html {
+      width: 100%;
+      overflow-x: hidden;
+      background: var(--canvas);
+    }
+
+    body {
+      width: 100%;
+      overflow-x: hidden;
+      min-width: 320px;
+      font-family: var(--font-ui);
+      background: var(--canvas);
+      color: var(--text-primary);
+      font-size: 14px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    a:hover { color: var(--teal-ink); }
+
+    img { max-width: 100%; }
+
+    code {
+      font-family: var(--font-data);
+      background: var(--well);
+      border: 1px solid var(--hairline);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 0.88em;
+    }
+
     .hero {
-      text-align: center;
-      padding: 80px 20px 60px;
-      max-width: 900px;
+      position: relative;
+      min-height: 610px;
+      display: grid;
+      align-items: end;
+      padding: 28px 24px 68px;
+      overflow: hidden;
+      border-bottom: 1px solid var(--hairline);
+      background:
+        linear-gradient(rgba(236,232,223,.68), rgba(236,232,223,.90)),
+        url('assets/screenshots/home-command-surface.png');
+      background-size: cover;
+      background-position: center top;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto 0 0;
+      height: 140px;
+      background: linear-gradient(rgba(236,232,223,0), var(--canvas));
+      pointer-events: none;
+    }
+
+    .hero-inner {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 1120px;
       margin: 0 auto;
     }
+
     .hero-badge {
-      display: inline-block;
-      font-family: var(--font-mono);
-      font-size: 0.75rem;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: var(--accent);
-      border: 1px solid var(--accent);
-      padding: 4px 12px;
-      border-radius: 20px;
-      margin-bottom: 24px;
-    }
-    .hero h1 {
-      font-size: 3.5rem;
-      font-weight: 800;
-      letter-spacing: -0.02em;
-      margin-bottom: 16px;
-      line-height: 1.1;
-    }
-    .hero h1 span { color: var(--accent); }
-    .hero p {
-      font-size: 1.25rem;
-      color: var(--text-muted);
-      max-width: 650px;
-      margin: 0 auto 32px;
-    }
-    .hero-buttons {
-      display: flex;
-      gap: 12px;
-      justify-content: center;
-      flex-wrap: wrap;
-    }
-    .btn {
       display: inline-flex;
       align-items: center;
       gap: 8px;
-      padding: 12px 24px;
+      font-family: var(--font-data);
+      font-size: 0.72rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--teal-ink);
+      background: rgba(225,245,238,.92);
+      border: 1px solid rgba(29,158,117,.24);
+      padding: 6px 10px;
+      border-radius: 8px;
+      margin-bottom: 18px;
+      box-shadow: var(--sh1);
+    }
+
+    .hero h1 {
+      max-width: 790px;
+      font-family: var(--font-display);
+      font-size: 76px;
+      font-weight: 700;
+      letter-spacing: 0;
+      margin-bottom: 18px;
+      line-height: 0.98;
+    }
+
+    .hero h1 span { color: var(--teal-ink); }
+
+    .hero p {
+      max-width: 690px;
+      font-size: 17px;
+      color: var(--text-secondary);
+      margin-bottom: 26px;
+    }
+
+    .hero-buttons {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 42px;
+      padding: 0 16px;
       border-radius: 8px;
       font-weight: 600;
-      font-size: 0.95rem;
-      transition: all 0.15s;
-      border: none;
-      cursor: pointer;
+      font-size: 0.92rem;
+      transition: background 0.15s, border-color 0.15s, transform 0.15s;
+      border: 1px solid transparent;
     }
-    .btn-primary {
-      background: var(--accent);
-      color: #000;
-    }
-    .btn-primary:hover { background: var(--accent-hover); color: #000; }
-    .btn-secondary {
-      background: var(--bg-card);
-      color: var(--text);
-      border: 1px solid var(--border);
-    }
-    .btn-secondary:hover { border-color: var(--accent); }
 
-    /* Pipeline section */
-    .pipeline-section {
-      max-width: 1100px;
-      margin: 0 auto 80px;
-      padding: 0 20px;
+    .btn:hover { transform: translateY(-1px); }
+
+    .btn-primary {
+      background: var(--teal);
+      color: #fff;
+      box-shadow: var(--sh1);
     }
+
+    .btn-primary:hover { background: var(--teal-ink); color: #fff; }
+
+    .btn-secondary {
+      background: rgba(255,255,255,.90);
+      color: var(--text-primary);
+      border-color: var(--border);
+      box-shadow: var(--sh1);
+    }
+
+    .btn-secondary:hover { border-color: rgba(29,158,117,.35); color: var(--text-primary); }
+
+    .screenshots-section,
+    .pipeline-section,
+    .features-section,
+    .install-section {
+      max-width: 1120px;
+      margin: 0 auto 72px;
+      padding: 0 24px;
+    }
+
+    .screenshots-section { margin-top: 44px; }
+
+    .install-section { max-width: 860px; }
+
     .section-label {
-      font-family: var(--font-mono);
+      font-family: var(--font-data);
       font-size: 0.7rem;
-      letter-spacing: 0.15em;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
-      color: var(--accent);
-      margin-bottom: 8px;
-    }
-    .section-title {
-      font-size: 2rem;
-      font-weight: 700;
-      margin-bottom: 12px;
-    }
-    .section-desc {
       color: var(--text-muted);
-      max-width: 600px;
-      margin-bottom: 40px;
+      margin-bottom: 10px;
     }
+
+    .section-title {
+      font-family: var(--font-display);
+      font-size: 32px;
+      font-weight: 650;
+      letter-spacing: 0;
+      margin-bottom: 10px;
+      line-height: 1.12;
+    }
+
+    .section-desc {
+      color: var(--text-secondary);
+      max-width: 720px;
+      margin-bottom: 28px;
+    }
+
     .pipeline-flow {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 7px;
       flex-wrap: wrap;
-      margin-bottom: 40px;
-      justify-content: center;
-    }
-    .pipeline-node {
-      font-family: var(--font-mono);
-      font-size: 0.8rem;
-      padding: 8px 16px;
+      margin-bottom: 28px;
+      padding: 14px;
+      background: var(--panel);
+      border: 1px solid var(--hairline);
       border-radius: 8px;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
+      box-shadow: var(--sh1);
+    }
+
+    .pipeline-node {
+      font-family: var(--font-data);
+      font-size: 0.76rem;
+      padding: 7px 11px;
+      border-radius: 8px;
+      background: var(--well);
+      border: 1px solid var(--hairline);
+      color: var(--text-secondary);
       font-weight: 600;
     }
-    .pipeline-node.active { border-color: var(--accent); color: var(--accent); }
+
+    .pipeline-node.active {
+      background: var(--teal-bg);
+      border-color: rgba(29,158,117,.24);
+      color: var(--teal-ink);
+    }
+
     .pipeline-arrow { color: var(--text-muted); font-size: 1.2rem; }
 
-    /* Screenshots */
-    .screenshots-section {
-      max-width: 1120px;
-      margin: 0 auto 80px;
-      padding: 0 20px;
-    }
     .screenshot-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 18px;
+      gap: 14px;
     }
+
     .screenshot-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 12px;
+      background: var(--panel);
+      border: 1px solid var(--hairline);
+      border-radius: 8px;
       overflow: hidden;
-      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
+      box-shadow: var(--sh1);
     }
+
     .screenshot-card img {
       display: block;
       width: 100%;
       height: auto;
-      background: #e8e2d7;
-    }
-    .screenshot-caption {
-      padding: 12px 14px;
-      color: var(--text-muted);
-      font-size: 0.85rem;
-      border-top: 1px solid var(--border);
+      background: var(--well);
     }
 
-    /* Agent cards */
+    .screenshot-caption {
+      min-height: 66px;
+      padding: 12px 14px;
+      color: var(--text-secondary);
+      font-size: 0.85rem;
+      border-top: 1px solid var(--hairline);
+    }
+
     .agent-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-      gap: 16px;
+      gap: 12px;
     }
+
     .agent-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 20px;
-      transition: border-color 0.15s;
+      background: var(--panel);
+      border: 1px solid var(--hairline);
+      border-radius: 8px;
+      padding: 18px;
+      box-shadow: var(--sh1);
+      transition: border-color 0.15s, transform 0.15s;
     }
-    .agent-card:hover { border-color: var(--accent); }
+
+    .agent-card:hover {
+      border-color: rgba(29,158,117,.28);
+      transform: translateY(-1px);
+    }
+
     .agent-card h3 {
       font-size: 1rem;
       margin-bottom: 6px;
@@ -202,117 +305,183 @@
       align-items: center;
       gap: 8px;
     }
+
     .agent-card h3 .tag {
-      font-family: var(--font-mono);
+      font-family: var(--font-data);
       font-size: 0.65rem;
-      background: var(--accent);
-      color: #000;
+      background: var(--well);
+      color: var(--text-secondary);
       padding: 2px 6px;
       border-radius: 4px;
       font-weight: 700;
     }
+
+    .agent-card:nth-child(3n+1) h3 .tag { background: var(--teal-bg); color: var(--teal-ink); }
+    .agent-card:nth-child(3n+2) h3 .tag { background: var(--purple-bg); color: var(--purple-ink); }
+    .agent-card:nth-child(3n) h3 .tag { background: var(--amber-bg); color: var(--amber-ink); }
+
     .agent-card p {
-      color: var(--text-muted);
+      color: var(--text-secondary);
       font-size: 0.85rem;
     }
 
-    /* Features */
-    .features-section {
-      max-width: 1100px;
-      margin: 0 auto 80px;
-      padding: 0 20px;
-    }
     .feature-grid {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-      gap: 24px;
+      gap: 12px;
     }
-    .feature {
-      padding: 24px;
-      background: var(--bg-card);
-      border-radius: 10px;
-      border: 1px solid var(--border);
-    }
-    .feature-icon {
-      font-size: 1.5rem;
-      margin-bottom: 12px;
-    }
-    .feature h3 { font-size: 1rem; margin-bottom: 6px; }
-    .feature p { color: var(--text-muted); font-size: 0.85rem; }
 
-    /* Install */
-    .install-section {
-      max-width: 800px;
-      margin: 0 auto 80px;
-      padding: 0 20px;
+    .feature {
+      padding: 18px;
+      background: var(--panel);
+      border-radius: 8px;
+      border: 1px solid var(--hairline);
+      box-shadow: var(--sh1);
     }
+
+    .feature-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 34px;
+      height: 26px;
+      padding: 0 8px;
+      margin-bottom: 12px;
+      font-family: var(--font-data);
+      font-size: 0.68rem;
+      font-weight: 700;
+      color: var(--teal-ink);
+      background: var(--teal-bg);
+      border: 1px solid rgba(29,158,117,.18);
+      border-radius: 6px;
+    }
+
+    .feature h3 { font-size: 1rem; margin-bottom: 6px; }
+    .feature p { color: var(--text-secondary); font-size: 0.85rem; }
+
     .code-block {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 20px 24px;
-      font-family: var(--font-mono);
+      background: var(--panel);
+      border: 1px solid var(--hairline);
+      border-radius: 8px;
+      padding: 20px;
+      font-family: var(--font-data);
       font-size: 0.85rem;
       line-height: 1.7;
       overflow-x: auto;
       margin-bottom: 16px;
+      box-shadow: var(--sh1);
     }
-    .code-block .comment { color: var(--text-muted); }
-    .code-block .cmd { color: var(--text); }
 
-    /* Data sources */
+    .code-block .comment { color: var(--text-muted); }
+    .code-block .cmd { color: var(--text-primary); }
+
     .data-table {
       width: 100%;
       border-collapse: collapse;
       font-size: 0.9rem;
+      background: var(--panel);
+      border: 1px solid var(--hairline);
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: var(--sh1);
     }
+
     .data-table th {
       text-align: left;
-      font-family: var(--font-mono);
+      font-family: var(--font-data);
       font-size: 0.7rem;
-      letter-spacing: 0.1em;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
       color: var(--text-muted);
-      padding: 8px 16px;
-      border-bottom: 1px solid var(--border);
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--hairline);
+      background: var(--soft);
     }
+
     .data-table td {
       padding: 12px 16px;
-      border-bottom: 1px solid var(--border);
+      border-bottom: 1px solid var(--hairline);
+      color: var(--text-secondary);
     }
+
+    .data-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    .data-table strong {
+      color: var(--text-primary);
+    }
+
     .data-table .badge-free {
-      background: #166534;
-      color: #86efac;
-      padding: 2px 8px;
-      border-radius: 4px;
-      font-size: 0.75rem;
-      font-weight: 600;
-    }
-    .data-table .badge-optional {
-      background: #713f12;
-      color: #fcd34d;
-      padding: 2px 8px;
+      display: inline-block;
+      background: var(--teal-bg);
+      color: var(--teal-ink);
+      padding: 2px 7px;
       border-radius: 4px;
       font-size: 0.75rem;
       font-weight: 600;
     }
 
-    /* Footer */
+    .data-table .badge-optional {
+      display: inline-block;
+      background: var(--amber-bg);
+      color: var(--amber-ink);
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
     footer {
       text-align: center;
       padding: 40px 20px;
       color: var(--text-muted);
       font-size: 0.85rem;
-      border-top: 1px solid var(--border);
+      border-top: 1px solid var(--hairline);
     }
+
     footer a { color: var(--text-muted); }
-    footer a:hover { color: var(--accent); }
+    footer a:hover { color: var(--teal-ink); }
 
     @media (max-width: 640px) {
-      .hero h1 { font-size: 2.2rem; }
-      .hero p { font-size: 1rem; }
-      .pipeline-flow { justify-content: flex-start; }
+      .hero {
+        min-height: 560px;
+        padding: 22px 18px 54px;
+        background:
+          linear-gradient(rgba(236,232,223,.93), rgba(236,232,223,.985)),
+          url('assets/screenshots/home-command-surface.png');
+        background-size: cover;
+        background-position: center top;
+      }
+
+      .hero h1 { font-size: 42px; }
+      .hero p {
+        max-width: 100%;
+        font-size: 0.98rem;
+      }
+      .hero-buttons { flex-direction: column; align-items: stretch; }
+      .btn { width: 100%; }
+      .screenshots-section,
+      .pipeline-section,
+      .features-section,
+      .install-section {
+        padding: 0 16px;
+        margin-bottom: 52px;
+      }
+      .section-title {
+        font-size: 24px;
+        line-height: 1.16;
+        overflow-wrap: break-word;
+      }
+      .section-desc { font-size: 0.94rem; }
+      .pipeline-flow { align-items: flex-start; }
       .screenshot-grid { grid-template-columns: 1fr; }
+      .data-table {
+        display: block;
+        max-width: 100%;
+        overflow-x: auto;
+        white-space: nowrap;
+      }
     }
   </style>
 </head>
@@ -320,16 +489,18 @@
 
 <!-- Hero -->
 <section class="hero">
-  <div class="hero-badge">Open Source &middot; Public Beta</div>
-  <h1><span>FundOps</span></h1>
-  <p>A local, AI-native investment operations workspace for one investor. Define your strategy in conversation, run durable research workflows, browse retained market data, and route reviewable decisions into an Inbox — without ever delegating the decision to software.</p>
-  <div class="hero-buttons">
-    <a href="https://github.com/jhchang0407-lang/fundops" class="btn btn-primary">
-      View on GitHub
-    </a>
-    <a href="https://github.com/jhchang0407-lang/fundops#installation" class="btn btn-secondary">
-      Quick Start
-    </a>
+  <div class="hero-inner">
+    <div class="hero-badge">Open Source &middot; Public Beta</div>
+    <h1><span>FundOps</span></h1>
+    <p>A local, AI-native investment operations workspace for one investor. Define your strategy in conversation, run durable research workflows, browse retained market data, and route reviewable decisions into an Inbox — without ever delegating the decision to software.</p>
+    <div class="hero-buttons">
+      <a href="https://github.com/jhchang0407-lang/fundops" class="btn btn-primary">
+        View on GitHub
+      </a>
+      <a href="https://github.com/jhchang0407-lang/fundops#installation" class="btn btn-secondary">
+        Quick Start
+      </a>
+    </div>
   </div>
 </section>
 
@@ -454,42 +625,42 @@
 
   <div class="feature-grid">
     <div class="feature">
-      <div class="feature-icon">&#x1f4dc;</div>
+      <div class="feature-icon">CV</div>
       <h3>Strategy as a Constitution</h3>
       <p>Plain-English strategy becomes versioned, typed criteria with deterministic wiring. Nothing activates without your explicit approval; versions are immutable.</p>
     </div>
     <div class="feature">
-      <div class="feature-icon">&#x1f50e;</div>
+      <div class="feature-icon">EV</div>
       <h3>Evidence Before Synthesis</h3>
       <p>Every material claim is grounded in retained, source-backed evidence or explicitly marked unsupported. Artifacts record the exact evidence bundle that produced them.</p>
     </div>
     <div class="feature">
-      <div class="feature-icon">&#x1f4c8;</div>
+      <div class="feature-icon">TH</div>
       <h3>Thesis Health Monitoring</h3>
       <p>Each memo ships a machine-checkable monitoring plan. Daily filing detection recalculates thesis health for exactly the tickers that filed.</p>
     </div>
     <div class="feature">
-      <div class="feature-icon">&#x1f4d2;</div>
+      <div class="feature-icon">PF</div>
       <h3>Ledger-First Portfolio</h3>
       <p>Purchase lots and sales are the source of truth; holdings and P&amp;L are rebuildable projections. Held positions queue memo-backed thesis coverage.</p>
     </div>
     <div class="feature">
-      <div class="feature-icon">&#x1f4ca;</div>
+      <div class="feature-icon">SEC</div>
       <h3>Bulk-First Free Data</h3>
       <p>SEC bulk products and batched Yahoo Finance prices cover the whole universe for free; daily ticks are ~1–3 MB. Live APIs are reserved for on-demand research.</p>
     </div>
     <div class="feature">
-      <div class="feature-icon">&#x1f916;</div>
+      <div class="feature-icon">AI</div>
       <h3>Bring Your Own AI</h3>
       <p>OpenAI API, the coding-agent CLI you already subscribe to (Claude Code / Codex), or a deterministic offline stub — every model call is recorded as an AI Usage Record.</p>
     </div>
     <div class="feature">
-      <div class="feature-icon">&#x1f4d6;</div>
+      <div class="feature-icon">AR</div>
       <h3>Append-Only Archive</h3>
       <p>Artifacts are never edited in place — new versions supersede old ones. Archive Q&amp;A answers questions across your retained history with citations.</p>
     </div>
     <div class="feature">
-      <div class="feature-icon">&#x2699;</div>
+      <div class="feature-icon">SYNC</div>
       <h3>Sometimes-On by Design</h3>
       <p>On launch, FundOps catches up everything since your last session. A headless <code>npm run sync</code> keeps data current from cron on days you don't open the app.</p>
     </div>
