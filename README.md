@@ -34,6 +34,10 @@ articulate strategy, write evidence-backed research artifacts, explain what chan
 reviewable improvements. Strategy activation, candidate promotion, memo selection, and portfolio
 actions stay yours, made through explicit approvals.
 
+This public repository contains the runnable application, tests, public website, and screenshots.
+Local planning notes, architecture decision logs, audits, evaluation notes, and operator context
+files are intentionally kept out of the published tree.
+
 The core loop:
 
 ```
@@ -171,8 +175,7 @@ Key invariants:
 - **Operational failure ≠ investment judgment.** Retries and failures stay visible as
   operational state; they never become verdicts or learning evidence.
 
-Product truth lives in [CONTEXT.md](CONTEXT.md), [docs/adr/](docs/adr/), and
-[docs/implementation-map.md](docs/implementation-map.md).
+The public website is served from `docs/index.html`; screenshots live in `docs/assets/screenshots/`.
 
 ## Development
 

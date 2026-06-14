@@ -26,7 +26,10 @@ backend/core/.cache/
 backend/data/universes/_dynamic_*
 
 # Internal working docs (kept local, not published)
+CONTEXT.md
+docs/**/*.md
 docs/internal/
+scripts/quality_*.py
 
 # OS & editor
 .DS_Store

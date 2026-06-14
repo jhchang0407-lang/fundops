@@ -1,3 +1,0 @@
-# Durable Local Work Queue
-
-FundOps will represent important local asynchronous work as Durable Local Work Records executed through a Local Work Queue. This includes provider fetches, eager financial recalculation, projection rebuilds, PDF rendering, workflow continuations, and workflow runs when the work can outlive a request, fail, retry, block user-visible state, or need Dashboard surfacing. We choose this over ephemeral background tasks so the local-first workspace can recover across restarts, coordinate provider-budget usage, explain failures, and keep provenance connected to the records and artifacts produced by work.

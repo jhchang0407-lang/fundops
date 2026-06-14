@@ -1,3 +1,0 @@
-# Version Financial Catalog And Mapping Rules
-
-FundOps will treat financial metric definitions, formulas, applicability rules, mapping rules, decision authority, and missing-data behavior as versioned catalog or governance records. The executable calculation logic may still live in application code, but every Calculated Financial Observation should retain the Financial Metric Catalog Version and Financial Mapping Rule Version that governed its result. We choose this over code-only constants so historical observations, completed PDFs, workflow decisions, and Learning/Evals remain replayable and explainable after formulas or mappings improve.
