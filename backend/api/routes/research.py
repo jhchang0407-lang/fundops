@@ -10,6 +10,7 @@ from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
 
 from backend.services import research_hub
+from backend.services.company_factsheet import data_quality_dashboard
 from backend.stores import get_stores
 
 router = APIRouter()
@@ -26,6 +27,13 @@ def _kick(coro) -> None:
 @router.get("/research/sectors")
 async def sectors_tree():
     return {"sectors": get_stores().identity.industry_tree()}
+
+
+@router.get("/research/data-quality")
+async def research_data_quality(limit: int = 50):
+    """Unified local data-quality dashboard over retained company records."""
+    limit = max(1, min(limit, 200))
+    return data_quality_dashboard(get_stores(), limit=limit)
 
 
 @router.get("/research/industry")

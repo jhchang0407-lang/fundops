@@ -518,6 +518,7 @@ export interface SnapshotBasis {
   period_end: string;
   period_type: string;
   stale?: boolean;
+  source?: string | null;
 }
 
 export interface StatementBlock {
@@ -533,6 +534,80 @@ export interface FinancialsCoverage {
   notes: string[];
 }
 
+export interface MetricSourceFact {
+  id?: string;
+  concept?: string | null;
+  taxonomy?: string | null;
+  period_end?: string | null;
+  period_type?: string | null;
+  value?: number | null;
+  unit?: string | null;
+  accession?: string | null;
+  filed_at?: string | null;
+  mapped_concept?: string | null;
+  input_metric?: string | null;
+}
+
+export interface MetricSourceDrilldown {
+  metric: string;
+  observation_id?: string | null;
+  value?: number | null;
+  unit?: string | null;
+  period_end?: string | null;
+  period_type?: string | null;
+  quality?: string | null;
+  is_calculated?: boolean;
+  catalog_version?: string | null;
+  mapping_version?: string | null;
+  lineage?: Record<string, unknown> | null;
+  facts?: MetricSourceFact[];
+  sources?: {
+    id: string;
+    kind?: string | null;
+    locator?: string | null;
+    title?: string | null;
+    publisher?: string | null;
+    fetched_at?: string | null;
+  }[];
+}
+
+export interface CompanyDataQuality {
+  required_metrics?: string[];
+  missing_metrics?: string[];
+  stale_metrics?: string[];
+  mapping_gaps?: {
+    counts?: Record<string, number>;
+    tags?: {
+      concept: string;
+      field_label?: string | null;
+      unit?: string | null;
+      mapping_status?: string | null;
+      count?: number;
+      latest_period?: string | null;
+      latest_filed?: string | null;
+    }[];
+  };
+  suspicious_values?: { metric: string; value: number; typical_range?: [number, number] }[];
+  price_stale?: boolean;
+  failed_runs?: Record<string, unknown>[];
+  issues?: Record<string, unknown>[];
+  notes?: string[];
+}
+
+export interface CompanySourceMetadata {
+  as_of?: string | null;
+  latest_filing_period?: string | null;
+  latest_filing_date?: string | null;
+  latest_filing_form?: string | null;
+  latest_filing_accession?: string | null;
+  latest_price_date?: string | null;
+  price_source?: string | null;
+  catalog_version?: string | null;
+  mapping_version?: string | null;
+  quality_result?: 'pass' | 'warn' | string | null;
+  source_hash?: string | null;
+}
+
 export interface CompanyFinancialsResponse {
   snapshot?: Record<string, number | null>;
   snapshot_basis?: Record<string, SnapshotBasis | null>;
@@ -540,6 +615,9 @@ export interface CompanyFinancialsResponse {
   quarterly?: StatementBlock;
   as_of?: string | null;
   coverage?: FinancialsCoverage;
+  data_quality?: CompanyDataQuality;
+  source_metadata?: CompanySourceMetadata;
+  sources?: Record<string, MetricSourceDrilldown | null>;
 }
 
 export interface ThesisWatchItem {
@@ -580,6 +658,20 @@ export const getCompanyFinancials = (ticker: string) =>
   fetchJSON<CompanyFinancialsResponse>(
     `/company/${encodeURIComponent(ticker)}/financials`,
   );
+
+export const getCompanyFinancialSource = (
+  ticker: string,
+  metric: string,
+  periodEnd?: string | null,
+  periodType?: string | null,
+) => {
+  const params = new URLSearchParams({ metric });
+  if (periodEnd) params.set('period_end', periodEnd);
+  if (periodType) params.set('period_type', periodType);
+  return fetchJSON<{ ticker: string; source: MetricSourceDrilldown }>(
+    `/company/${encodeURIComponent(ticker)}/financials/source?${params.toString()}`,
+  );
+};
 
 export const getThesisHealth = (ticker: string) =>
   fetchJSON<ThesisHealthResponse>(

@@ -18,15 +18,12 @@ from __future__ import annotations
 
 from backend.core.metric_schema import METRIC_SCHEMA
 from backend.domain.criteria import Criterion, evaluate
-from backend.domain.derive import derive_price_metrics
+from backend.services import company_factsheet as cf
 
 # Metrics whose history grounds trend analysis (when retained).
-KEY_HISTORY_METRICS = (
-    "revenue", "gross_margin", "operating_margin", "net_margin",
-    "free_cash_flow", "eps", "roic", "debt_equity",
-)
-ANNUAL_PERIODS = 5
-QUARTERLY_PERIODS = 8
+KEY_HISTORY_METRICS = cf.KEY_HISTORY_METRICS
+ANNUAL_PERIODS = cf.ANNUAL_PERIODS
+QUARTERLY_PERIODS = cf.QUARTERLY_PERIODS
 PEER_LIMIT = 5
 
 # Decimal-stored metrics whose schema type is float but whose natural display
@@ -78,16 +75,18 @@ def fmt_value(metric_id: str, value) -> str:
 def build_company_packet(stores, ticker: str, entity_id: str | None = None) -> dict:
     """One shared company evidence packet (see module docstring)."""
     ticker = ticker.upper()
-    ent = stores.identity.ensure_entity(ticker)
-    entity_id = entity_id or ent["id"]
-    notes: list[str] = []
-
-    latest = stores.financial.latest(entity_id)
+    sheet = cf.build_company_fact_sheet(
+        stores, ticker, profile="memo", entity_id=entity_id, ensure=True,
+    )
+    ent = sheet["identity"]
+    entity_id = sheet["identity"]["entity_id"]
+    latest = sheet["latest"]
+    notes = list(sheet["data_quality_notes"])
     if not latest:
         notes.append("no retained latest financials for this entity")
 
-    history = _build_history(stores, entity_id)
-    trends = _build_trends(history)
+    history = sheet["history"]
+    trends = sheet["trends"]
     n_annual = max((len(s.get("annual") or []) for s in history.values()), default=0)
     if n_annual < 2:
         notes.append(f"annual history limited to {n_annual} period(s); "
@@ -95,17 +94,9 @@ def build_company_packet(stores, ticker: str, entity_id: str | None = None) -> d
     if not any(s.get("quarterly") for s in history.values()):
         notes.append("no quarterly observations retained")
 
-    price_context = _build_price_context(stores, ticker, latest)
+    price_context = sheet["price_context"]
     if price_context.get("high_52w") is None:
         notes.append("no retained daily price history (52-week range unavailable)")
-
-    # Price-dependent valuation metrics (fcf_yield, pe, market_cap, …) and
-    # growth are not stored in latest_financials — they change with price or
-    # need multi-period history — so derive them here from the building blocks
-    # the packet already holds. Without this the deterministic thesis anchors
-    # see fcf_yield/revenue_growth as 0 and every candidate reads as a 0% return.
-    _enrich_valuation_metrics(latest, price_context.get("price"), trends, notes)
-    price_context["market_cap"] = latest.get("market_cap")
 
     peers = _build_peers(stores, ent.get("sector"), entity_id)
     if not peers:
@@ -127,7 +118,9 @@ def build_company_packet(stores, ticker: str, entity_id: str | None = None) -> d
         "peers": peers,
         "ownership": ownership,
         "constitution_check": constitution_check,
-        "data_quality_notes": notes,
+        "data_quality_notes": list(dict.fromkeys(notes)),
+        "source_metadata": sheet["source_metadata"],
+        "source_drilldowns": sheet["source_drilldowns"],
     }
 
 
@@ -139,88 +132,31 @@ def enriched_snapshot(stores, entity_id: str, price: float | None,
     deliberately NOT stored — they change with price or need multi-period
     context — so any read surface (Company Page snapshot, chat) must derive
     them at read time the same way the thesis packet does (ADR-0017)."""
-    latest = dict(latest if latest is not None else stores.financial.latest(entity_id))
-    if latest:
-        trends = _build_trends(_build_history(stores, entity_id))
-        _enrich_valuation_metrics(latest, price, trends, notes=[])
-    return latest
+    return cf.enriched_snapshot(stores, entity_id, price, latest)
 
 
 def _build_history(stores, entity_id: str) -> dict:
     """Per-metric observation series, newest first: up to 5 annual + 8 quarterly."""
-    out: dict[str, dict] = {}
-    for period_type, cap in (("annual", ANNUAL_PERIODS), ("quarterly", QUARTERLY_PERIODS)):
-        for o in stores.financial.observations(entity_id, period_type=period_type, limit=400):
-            if o["metric"] not in KEY_HISTORY_METRICS or o["value"] is None:
-                continue
-            series = out.setdefault(o["metric"], {}).setdefault(period_type, [])
-            if len(series) < cap:
-                series.append({"period_end": o["period_end"], "value": o["value"]})
-    return out
+    return cf.build_history(stores, entity_id)
 
 
 def _build_trends(history: dict) -> dict:
     """Deterministic trend computations from the retained history."""
-    trends: dict = {}
-    rev_annual = (history.get("revenue") or {}).get("annual") or []
-    cagr = _cagr(rev_annual)
-    if cagr is not None:
-        trends["revenue_cagr_pct"] = round(cagr, 1)
-        trends["revenue_cagr_years"] = len(rev_annual) - 1
-    for metric in ("gross_margin", "operating_margin", "net_margin"):
-        traj = _trajectory((history.get(metric) or {}).get("annual") or [])
-        if traj:
-            trends[f"{metric}_trajectory"] = traj
-    qrev = (history.get("revenue") or {}).get("quarterly") or []
-    if len(qrev) >= 5 and isinstance(qrev[4]["value"], (int, float)) and qrev[4]["value"]:
-        trends["latest_quarter_revenue_yoy_pct"] = round(
-            (qrev[0]["value"] / qrev[4]["value"] - 1) * 100, 1)
-    return trends
+    return cf.build_trends(history)
 
 
 def _cagr(series: list[dict]) -> float | None:
     """CAGR in % over a newest-first series; needs 2+ positive endpoints."""
-    if len(series) < 2:
-        return None
-    latest, oldest = series[0]["value"], series[-1]["value"]
-    years = len(series) - 1
-    if not all(isinstance(v, (int, float)) and v > 0 for v in (latest, oldest)):
-        return None
-    return ((latest / oldest) ** (1.0 / years) - 1.0) * 100.0
+    return cf._cagr(series)
 
 
 def _trajectory(series: list[dict]) -> dict | None:
     """Margin trajectory over a newest-first annual series, in bps."""
-    if len(series) < 2:
-        return None
-    latest, oldest = series[0]["value"], series[-1]["value"]
-    if not all(isinstance(v, (int, float)) for v in (latest, oldest)):
-        return None
-    change_bps = round((latest - oldest) * 10000)
-    if change_bps > 50:
-        direction = "expanding"
-    elif change_bps < -50:
-        direction = "contracting"
-    else:
-        direction = "stable"
-    return {"direction": direction, "change_bps": change_bps,
-            "periods": len(series), "latest": latest, "oldest": oldest}
+    return cf._trajectory(series)
 
 
 def _build_price_context(stores, ticker: str, latest: dict) -> dict:
-    price = stores.portfolio.prices().get(ticker) or latest.get("price")
-    if price is None:
-        close = stores.bulk.latest_close(ticker)
-        price = close["close"] if close else None
-    ctx: dict = {"price": price, "market_cap": latest.get("market_cap")}
-    rows = stores.bulk.price_range(ticker)[-252:]  # ~52 trading weeks
-    closes = [r["close"] for r in rows if isinstance(r.get("close"), (int, float))]
-    if closes:
-        hi, lo = max(closes), min(closes)
-        ctx["high_52w"], ctx["low_52w"] = round(hi, 2), round(lo, 2)
-        if price and hi:
-            ctx["pct_off_52w_high"] = round((price / hi - 1) * 100, 1)
-    return ctx
+    return cf.build_price_context(stores, ticker, latest)
 
 
 def _enrich_valuation_metrics(latest: dict, price: float | None,
@@ -228,35 +164,7 @@ def _enrich_valuation_metrics(latest: dict, price: float | None,
     """Fill in price-dependent and growth metrics in-place when missing, from
     data the packet already has. Decimals for yields (0.05 = 5%), matching
     to_flat_metrics. Only fills gaps — never overwrites a stored value."""
-    def _f(key):
-        v = latest.get(key)
-        return v if isinstance(v, (int, float)) else None
-
-    # Price-dependent metrics (market_cap, fcf_yield, earnings_yield, pe) come
-    # from the one shared derivation so the snapshot, peers, and factor tilts
-    # never disagree (backend/domain/derive.py).
-    derive_price_metrics(latest, price)
-    revenue = _f("revenue")
-
-    # revenue growth (decimal) from retained multi-period history: prefer the
-    # most recent YoY, fall back to the multi-year CAGR.
-    if not latest.get("revenue_growth"):
-        yoy = trends.get("latest_quarter_revenue_yoy_pct")
-        cagr = trends.get("revenue_cagr_pct")
-        growth_pct = yoy if isinstance(yoy, (int, float)) else cagr
-        if isinstance(growth_pct, (int, float)):
-            latest["revenue_growth"] = growth_pct / 100.0
-        elif revenue is not None:
-            notes.append("revenue growth unavailable (need 2+ retained periods)")
-
-    # ROIC/ROE explode when book equity is tiny (e.g. heavy buybacks) — flag so
-    # narratives don't present 700%+ as a real quality signal.
-    for key in ("roic", "roe"):
-        v = _f(key)
-        if v is not None and abs(v) > 1.5:
-            notes.append(
-                f"{key} {v * 100:.0f}% reflects an unusually small denominator "
-                "(likely low book equity); treat as unreliable")
+    cf.enrich_valuation_metrics(latest, price, trends, notes)
 
 
 def _build_peers(stores, sector: str | None, entity_id: str) -> list[dict]:

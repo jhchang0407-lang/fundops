@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from backend.core.workspace import loads
 from backend.domain import labels
+from backend.services import company_factsheet
 from backend.stores import get_stores
 from backend.workflows import thesis_health
 
@@ -18,8 +19,6 @@ router = APIRouter()
 
 LANE_LIMIT = 10
 PRICE_RANGE_DAYS = {"1m": 31, "6m": 183, "1y": 366, "5y": 1830}
-SNAPSHOT_METRICS = ("market_cap", "pe", "revenue_growth", "gross_margin",
-                    "operating_margin", "fcf_yield", "roic", "debt_equity")
 STAGE_FOR_KIND = {"screener_snapshot": "screener", "thesis": "thesis",
                   "ic_verdict": "ic_review", "investment_memo": "memo"}
 
@@ -281,62 +280,45 @@ async def company_financials(ticker: str):
     ent = stores.identity.resolve_ticker(ticker)
     if not ent:
         raise HTTPException(status_code=404, detail=f"unknown ticker {ticker}")
-    # Price-dependent valuation metrics (market_cap, pe, fcf_yield) and growth
-    # are derived at read time — they aren't stored (ADR-0017). Reuse the same
-    # enrichment the thesis packet applies so the Company Page agrees with it.
-    from backend.workflows.evidence_packets import enriched_snapshot
-
-    price = stores.portfolio.prices().get(ticker)
-    if price is None and (lc := stores.bulk.latest_close(ticker)):
-        price = lc["close"]
-    latest = enriched_snapshot(stores, ent["id"], price)
-    snapshot = {m: latest.get(m) for m in SNAPSHOT_METRICS}
-    # Per-metric reporting basis so the KPI strip can show what period each
-    # value is from instead of silently mixing annual and quarterly (ISSUE-018).
-    basis = stores.financial.latest_basis(ent["id"])
-    snapshot_basis = {m: basis.get(m) for m in SNAPSHOT_METRICS}
-    annual = _periods(stores, ent["id"], "annual")
-    quarterly = _periods(stores, ent["id"], "quarterly")
-    period_ends = ([p["period_end"] for p in annual["periods"]]
-                   + [p["period_end"] for p in quarterly["periods"]])
-    return {"snapshot": snapshot, "snapshot_basis": snapshot_basis,
-            "annual": annual, "quarterly": quarterly,
-            "as_of": max(period_ends) if period_ends else None,
-            "coverage": _coverage(snapshot, annual, quarterly)}
+    sheet = company_factsheet.build_company_fact_sheet(
+        stores, ticker, profile="company_page", entity_id=ent["id"],
+    )
+    period_ends = ([p["period_end"] for p in sheet["annual"]["periods"]]
+                   + [p["period_end"] for p in sheet["quarterly"]["periods"]])
+    return {
+        "snapshot": sheet["snapshot"],
+        "snapshot_basis": sheet["snapshot_basis"],
+        "annual": sheet["annual"],
+        "quarterly": sheet["quarterly"],
+        "as_of": max(period_ends) if period_ends else None,
+        "coverage": sheet["coverage"],
+        "data_quality": sheet["data_quality"],
+        "source_metadata": sheet["source_metadata"],
+        "sources": sheet["source_drilldowns"],
+    }
 
 
-def _coverage(snapshot: dict, annual: dict, quarterly: dict) -> dict:
-    """Honest, deterministic completeness map so the UI explains blanks instead
-    of rendering a silent wall of em-dashes (institutional QA). Per statement
-    section: is anything retained + how many distinct lines; per snapshot metric:
-    present vs missing; plus plain-English notes for the common gap shapes."""
-    sections: dict[str, dict] = {}
-    for sec in ("income", "balance", "cashflow"):
-        cols = (annual.get(sec) or []) + (quarterly.get(sec) or [])
-        metrics = {m for c in cols for m in c["metrics"]}
-        sections[sec] = {"available": bool(cols), "metric_count": len(metrics)}
-    snap = {m: ("present" if snapshot.get(m) is not None else "missing")
-            for m in SNAPSHOT_METRICS}
-    notes: list[str] = []
-    if not any(s["available"] for s in sections.values()):
-        notes.append("No financial statements have been retained for this company yet — "
-                     "it may be newly added, delisted, or awaiting its first data sync.")
-    elif sections["cashflow"]["available"] and sections["cashflow"]["metric_count"] <= 1:
-        notes.append("Cash-flow detail is limited to operating cash flow for this filer; "
-                     "capex and free cash flow are not in its standardized tags yet.")
-    return {"sections": sections, "snapshot": snap, "notes": notes}
-
-
-def _periods(stores, entity_id: str, period_type: str) -> dict:
-    """Statement block for one cadence: the raw normalized period list plus
-    standardized income/balance/cashflow sections (catalog-driven, one column
-    per fiscal period, thin columns suppressed — ISSUE-014/016/017)."""
-    from backend.domain import statements
-
-    raw = stores.financial.periods(entity_id, period_type)
-    block = {"periods": statements.normalize_periods(raw, period_type)}
-    block.update(statements.sectioned(raw, period_type))
-    return block
+@router.get("/company/{ticker}/financials/source")
+async def company_financial_source(
+    ticker: str, metric: str, period_end: str | None = None,
+    period_type: str | None = None,
+):
+    ticker = ticker.upper()
+    stores = get_stores()
+    ent = stores.identity.resolve_ticker(ticker)
+    if not ent:
+        raise HTTPException(status_code=404, detail=f"unknown ticker {ticker}")
+    sheet = company_factsheet.build_company_fact_sheet(
+        stores, ticker, profile="source_drilldown", entity_id=ent["id"],
+    )
+    if period_end or period_type:
+        out = stores.financial.source_drilldown(ent["id"], metric, period_end, period_type)
+    else:
+        out = sheet["source_drilldowns"].get(metric) or stores.financial.source_drilldown(
+            ent["id"], metric)
+    if not out:
+        raise HTTPException(status_code=404, detail=f"no source retained for {metric}")
+    return {"ticker": ticker, "source": out}
 
 
 @router.get("/company/{ticker}/thesis-health")

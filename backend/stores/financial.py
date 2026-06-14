@@ -233,6 +233,161 @@ class FinancialStore:
                               "period_type": r["period_type"],
                               "stale": _stale(r["period_end"])} for r in rows}
 
+    def source_drilldown(
+        self, entity_id: str, metric: str, period_end: str | None = None,
+        period_type: str | None = None,
+    ) -> dict | None:
+        """Trace a metric value back to its accepted observation and retained
+        reported fact(s), when the lineage has enough SEC basis.
+
+        This is a read-side projection only. Derived observations expose their
+        formula/input lineage and attach any retained input facts for the same
+        period; read-time derived values (market_cap, P/E, growth) are handled by
+        the company fact-sheet builder because they do not have observation rows.
+        """
+        obs = self._source_observation(entity_id, metric, period_end, period_type)
+        if not obs:
+            return None
+        d = dict(obs)
+        lineage = loads(d.get("lineage"), {})
+        facts = self._facts_for_observation(entity_id, d, lineage)
+        source_ids = sorted({f.get("source_id") for f in facts if f.get("source_id")})
+        sources = self._source_rows(source_ids)
+        return {
+            "metric": d["metric"],
+            "observation_id": d["id"],
+            "value": d["value"],
+            "unit": d["unit"],
+            "period_end": d["period_end"],
+            "period_type": d["period_type"],
+            "quality": d["quality"],
+            "is_calculated": bool(d["is_calculated"]),
+            "catalog_version": d["catalog_version"],
+            "mapping_version": d["mapping_version"],
+            "lineage": lineage,
+            "facts": facts,
+            "sources": sources,
+        }
+
+    def latest_source_drilldowns(self, entity_id: str, metrics: list[str] | tuple[str, ...]) -> dict:
+        return {
+            metric: drilldown
+            for metric in metrics
+            if (drilldown := self.source_drilldown(entity_id, metric)) is not None
+        }
+
+    def mapping_gap_summary(self, entity_id: str, limit: int = 8) -> dict:
+        """Compact data-quality read for retained unmapped/rejected tags."""
+        counts = {
+            r["mapping_status"] or "unknown": r["n"]
+            for r in self.ws.query(
+                "SELECT COALESCE(mapping_status, 'unknown') AS mapping_status, COUNT(*) AS n "
+                "FROM reported_financial_facts WHERE entity_id = ? AND superseded_by IS NULL "
+                "AND mapping_status IS NOT NULL GROUP BY mapping_status",
+                (entity_id,),
+            )
+        }
+        rows = self.ws.query(
+            "SELECT concept, field_label, unit, mapping_status, COUNT(*) AS count, "
+            "MAX(period_end) AS latest_period, MAX(filed_at) AS latest_filed "
+            "FROM reported_financial_facts WHERE entity_id = ? AND superseded_by IS NULL "
+            "AND mapping_status IN ('unmapped', 'rejected', 'candidate') "
+            "GROUP BY concept, field_label, unit, mapping_status "
+            "ORDER BY count DESC, latest_period DESC LIMIT ?",
+            (entity_id, limit),
+        )
+        return {"counts": counts, "tags": [dict(r) for r in rows]}
+
+    def _source_observation(
+        self, entity_id: str, metric: str, period_end: str | None,
+        period_type: str | None,
+    ):
+        clauses = [
+            "entity_id = ?", "metric = ?", "superseded_by IS NULL",
+            "quality = 'accepted'",
+        ]
+        params: list = [entity_id, metric]
+        if period_end:
+            clauses.append("period_end = ?")
+            params.append(period_end)
+        if period_type:
+            clauses.append("period_type = ?")
+            params.append(period_type)
+        if not period_end and not period_type:
+            latest = self.ws.query_one(
+                "SELECT period_end, period_type FROM latest_financials "
+                "WHERE entity_id = ? AND metric = ?",
+                (entity_id, metric),
+            )
+            if latest:
+                clauses.append("period_end = ?")
+                clauses.append("period_type = ?")
+                params.extend([latest["period_end"], latest["period_type"]])
+        return self.ws.query_one(
+            f"SELECT * FROM financial_observations WHERE {' AND '.join(clauses)} "
+            "ORDER BY captured_at DESC LIMIT 1",
+            params,
+        )
+
+    def _facts_for_observation(self, entity_id: str, obs: dict, lineage: dict) -> list[dict]:
+        facts: list[dict] = []
+        seen: set[str] = set()
+
+        def add_rows(rows, input_metric: str | None = None) -> None:
+            for row in rows:
+                d = dict(row)
+                if d["id"] in seen:
+                    continue
+                seen.add(d["id"])
+                if input_metric:
+                    d["input_metric"] = input_metric
+                facts.append(d)
+
+        tag = lineage.get("tag") or lineage.get("concept")
+        if tag:
+            clauses = ["entity_id = ?", "concept = ?", "period_end = ?", "period_type = ?",
+                       "superseded_by IS NULL"]
+            params: list = [entity_id, tag, obs["period_end"], obs["period_type"]]
+            if lineage.get("accession"):
+                clauses.append("accession = ?")
+                params.append(lineage["accession"])
+            add_rows(self.ws.query(
+                f"SELECT * FROM reported_financial_facts WHERE {' AND '.join(clauses)} "
+                "ORDER BY filed_at DESC, captured_at DESC LIMIT 5",
+                params,
+            ))
+
+        # Direct mapped observations may not carry a tag in older rows. Fall
+        # back to mapped_concept for the same metric/period.
+        add_rows(self.ws.query(
+            "SELECT * FROM reported_financial_facts WHERE entity_id = ? "
+            "AND mapped_concept = ? AND period_end = ? AND period_type = ? "
+            "AND superseded_by IS NULL ORDER BY filed_at DESC, captured_at DESC LIMIT 5",
+            (entity_id, obs["metric"], obs["period_end"], obs["period_type"]),
+        ))
+
+        inputs = lineage.get("inputs") if isinstance(lineage, dict) else None
+        if isinstance(inputs, dict):
+            for input_metric in inputs:
+                add_rows(self.ws.query(
+                    "SELECT * FROM reported_financial_facts WHERE entity_id = ? "
+                    "AND mapped_concept = ? AND period_end = ? AND period_type = ? "
+                    "AND superseded_by IS NULL ORDER BY filed_at DESC, captured_at DESC LIMIT 5",
+                    (entity_id, input_metric, obs["period_end"], obs["period_type"]),
+                ), input_metric=input_metric)
+        return facts
+
+    def _source_rows(self, source_ids: list[str]) -> list[dict]:
+        if not source_ids:
+            return []
+        placeholders = ",".join("?" for _ in source_ids)
+        rows = self.ws.query(
+            f"SELECT id, kind, locator, title, publisher, content_hash, retention_tier, "
+            f"fetched_at FROM evidence_sources WHERE id IN ({placeholders})",
+            source_ids,
+        )
+        return [dict(r) for r in rows]
+
     def latest_value(self, entity_id: str, metric: str) -> float | None:
         row = self.ws.query_one(
             "SELECT value FROM latest_financials WHERE entity_id = ? AND metric = ?",

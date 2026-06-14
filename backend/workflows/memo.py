@@ -25,7 +25,7 @@ import logging
 from backend.core import web_research
 from backend.core.ai import PROMPT_VERSION, get_ai
 from backend.core.workspace import now_iso
-from backend.domain import artifact_schemas, metric_catalog
+from backend.domain import artifact_schemas, metric_catalog, prose_quality
 from backend.domain.artifact_schemas import (
     MEMO_DECISIONS, MEMO_GENERATION_ORDER, MEMO_OUTLINE,
 )
@@ -280,6 +280,7 @@ async def _write_memo(stores, run_id: str, ticker: str, provenance: str,
             sections[sec_id] = await _write_section(stores, sec_id, ctx, sections)
         _attach_deterministic_extras(sections, ctx)
         warnings = _apply_decision_default(sections)
+        warnings += _memo_quality_warnings(sections)
 
         plan_items = await _monitoring_plan(stores, ticker, sections, ctx)
         warnings += [f"monitoring item {it['title']!r}: {note}"
@@ -457,14 +458,32 @@ async def _write_section(stores, sec_id: str, ctx: dict, done: dict,
     if repair_errors is None and get_ai().provider != "stub":
         thin = [s for s, text in out["subsections"].items()
                 if len(text.split()) < SECTION_MIN_WORDS]
-        if thin:
+        low_density = [
+            s for s, text in out["subsections"].items()
+            if text and prose_quality.figure_density(text) < prose_quality.MEMO_DENSITY_FLOOR
+        ]
+        if thin or low_density:
+            repair_notes = [
+                f"subsection '{s}' was only {len(out['subsections'][s].split())} "
+                "words — expand to 120-280 words of figure-citing analysis"
+                for s in thin
+            ]
+            repair_notes += [
+                f"subsection '{s}' has low figure density "
+                f"({prose_quality.figure_density(out['subsections'][s]):.0%}); "
+                "rewrite so at least one in four substantive sentences cites a "
+                "specific figure from the section evidence package"
+                for s in low_density
+            ]
             retry = await _write_section(
-                stores, sec_id, ctx, done,
-                repair_errors=[f"subsection '{s}' was only "
-                               f"{len(out['subsections'][s].split())} words — expand to "
-                               "120-280 words of figure-citing analysis" for s in thin])
-            for s in thin:
-                if len(retry["subsections"].get(s, "").split()) > len(out["subsections"][s].split()):
+                stores, sec_id, ctx, done, repair_errors=repair_notes)
+            for s in set(thin + low_density):
+                old_text = out["subsections"].get(s, "")
+                new_text = retry["subsections"].get(s, "")
+                old_density = prose_quality.figure_density(old_text)
+                new_density = prose_quality.figure_density(new_text)
+                if (len(new_text.split()) > len(old_text.split())
+                        or new_density > old_density):
                     out["subsections"][s] = retry["subsections"][s]
     return out
 
@@ -596,6 +615,23 @@ def _apply_decision_default(sections: dict) -> list[str]:
         fields["decision"] = "needs_more_evidence"
         return [f"invalid memo decision {bad!r}; defaulted to needs_more_evidence"]
     return []
+
+
+def _memo_quality_warnings(sections: dict) -> list[str]:
+    """Pre-save memo prose quality gate. Warnings are retained on the artifact
+    validation payload so quality failures are visible before any audit script
+    runs; model generation gets one repair pass in _write_section."""
+    warnings: list[str] = []
+    for sec_id, sec in sections.items():
+        for sub, text in (sec.get("subsections") or {}).items():
+            if not text:
+                continue
+            density = prose_quality.figure_density(text)
+            if density < prose_quality.MEMO_DENSITY_FLOOR:
+                warnings.append(
+                    f"{sec_id}.{sub}: low figure density "
+                    f"({density:.0%} of substantive sentences carry a number)")
+    return warnings
 
 
 def _sections_with_errors(errors: list[str]) -> list[str]:

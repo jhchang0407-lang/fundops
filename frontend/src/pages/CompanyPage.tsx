@@ -371,7 +371,83 @@ function basisLabel(b: SnapshotBasis | null | undefined): string {
   const year = b.period_end.slice(0, 4);
   if (b.period_type === 'annual') return `FY${year}`;
   if (b.period_type === 'ttm') return `TTM ${b.period_end.slice(0, 7)}`;
+  if (b.period_type === 'projection') return `proj ${b.period_end}`;
   return b.period_end.slice(0, 7); // quarterly → YYYY-MM
+}
+
+function sourceSummary(
+  metric: string,
+  data: CompanyFinancialsResponse | undefined,
+): string {
+  const source = data?.sources?.[metric];
+  const basis = basisLabel(data?.snapshot_basis?.[metric]);
+  if (!source) return basis ? `${basis} · source detail not retained` : 'Source detail not retained';
+  const lineage = source.lineage && typeof source.lineage === 'object'
+    ? (source.lineage as Record<string, unknown>)
+    : {};
+  const formula = typeof lineage.formula === 'string' ? lineage.formula : null;
+  const fact = source.facts?.[0];
+  const parts = [
+    basis,
+    source.is_calculated ? 'calculated' : 'reported',
+    fact?.accession ? `accession ${fact.accession}` : null,
+    fact?.concept ?? formula,
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
+function DataIntegrityPanel({ data }: { data: CompanyFinancialsResponse | undefined }) {
+  const q = data?.data_quality;
+  const meta = data?.source_metadata;
+  if (!q && !meta) return null;
+  const missing = q?.missing_metrics ?? [];
+  const stale = q?.stale_metrics ?? [];
+  const unmapped = q?.mapping_gaps?.counts?.unmapped ?? 0;
+  const rejected = q?.mapping_gaps?.counts?.rejected ?? 0;
+  const suspicious = q?.suspicious_values ?? [];
+  const issueCount = q?.issues?.length ?? 0;
+  const qualityClass = meta?.quality_result === 'pass' ? 'health-chip intact' : 'health-chip watching';
+  const qualityText = meta?.quality_result === 'pass' ? 'quality pass' : `${issueCount} quality signal${issueCount === 1 ? '' : 's'}`;
+  const tagRows = q?.mapping_gaps?.tags ?? [];
+  return (
+    <div style={{ borderTop: '1px solid var(--border)', borderBottom: '1px solid var(--border)', padding: '10px 0', margin: '10px 0 16px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+        <span className="section-label" style={{ marginBottom: 0 }}>
+          Data Integrity
+        </span>
+        <span className={qualityClass}>{qualityText}</span>
+        {meta?.source_hash && <span className="inline-metadata">source {meta.source_hash}</span>}
+      </div>
+      <div className="kv-grid" style={{ maxWidth: 760, marginBottom: 8 }}>
+        <span className="kv-key">Latest filing period</span>
+        <span className="kv-val">{meta?.latest_filing_period ? fmtDate(meta.latest_filing_period) : '—'}</span>
+        <span className="kv-key">Latest filing</span>
+        <span className="kv-val">
+          {[meta?.latest_filing_form, meta?.latest_filing_date ? fmtDate(meta.latest_filing_date) : null].filter(Boolean).join(' · ') || '—'}
+        </span>
+        <span className="kv-key">Latest price</span>
+        <span className="kv-val">{meta?.latest_price_date ? fmtDate(meta.latest_price_date) : '—'}</span>
+        <span className="kv-key">Catalog / mapping</span>
+        <span className="kv-val">{[meta?.catalog_version, meta?.mapping_version].filter(Boolean).join(' / ') || '—'}</span>
+      </div>
+      <div className="inline-metadata" style={{ gap: 8, flexWrap: 'wrap' }}>
+        {missing.length > 0 && <span>Missing: {missing.map(humanizeLabel).slice(0, 6).join(', ')}</span>}
+        {stale.length > 0 && <span>Stale: {stale.map(humanizeLabel).slice(0, 6).join(', ')}</span>}
+        {unmapped > 0 && <span>{unmapped} unmapped tag{unmapped === 1 ? '' : 's'}</span>}
+        {rejected > 0 && <span>{rejected} rejected mapping{rejected === 1 ? '' : 's'}</span>}
+        {suspicious.length > 0 && <span>{suspicious.length} suspicious value{suspicious.length === 1 ? '' : 's'}</span>}
+        {(q?.price_stale) && <span>price stale</span>}
+        {missing.length === 0 && stale.length === 0 && unmapped === 0 && suspicious.length === 0 && !q?.price_stale && (
+          <span>Required metrics and price basis are current for this profile.</span>
+        )}
+      </div>
+      {tagRows.length > 0 && (
+        <div className="empty-note" style={{ padding: '6px 0 0', fontSize: 'var(--text-xs)' }}>
+          Unmapped examples: {tagRows.slice(0, 3).map((t) => t.field_label || t.concept).join(' · ')}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /* ── price chart (bulk price history, ADR-0059) ── */
@@ -652,39 +728,42 @@ function FinancialsTab({ ticker }: { ticker: string }) {
     <div>
       <PriceChart ticker={ticker} />
       <div className="fin-strip">
-        {SNAPSHOT_SLOTS.map((s) => (
-          <div
-            className="kpi-mini askable"
-            key={s.key}
-            title="Click to ask about this"
-            onClick={(e) =>
-              ask(e, {
-                title: `${ticker} · ${s.label} ${s.fmt(snapshot[s.key])}`,
-                questions: metricQuestions(ticker, s.label, s.fmt(snapshot[s.key])),
-              })
-            }
-          >
-            <div className="kpi-mini-label">{s.label}</div>
-            <div className="kpi-mini-value">{s.fmt(snapshot[s.key])}</div>
-            {basisLabel(snapshotBasis[s.key]) && (
-              <div
-                style={{
-                  fontSize: '10px', marginTop: 2,
-                  color: snapshotBasis[s.key]?.stale ? 'var(--amber-ink, var(--negative))' : 'var(--text-muted)',
-                }}
-                title={snapshotBasis[s.key]?.stale
-                  ? 'This figure was not restated by recent filings and is stale'
-                  : 'Reporting period this value is from'}
-              >
-                {basisLabel(snapshotBasis[s.key])}{snapshotBasis[s.key]?.stale ? ' · stale' : ''}
-              </div>
-            )}
-          </div>
-        ))}
+        {SNAPSHOT_SLOTS.map((s) => {
+          const display = s.fmt(snapshot[s.key]);
+          const source = sourceSummary(s.key, data);
+          return (
+            <div
+              className="kpi-mini askable"
+              key={s.key}
+              title={`Click to ask about this · ${source}`}
+              onClick={(e) =>
+                ask(e, {
+                  title: `${ticker} · ${s.label} ${display}`,
+                  questions: metricQuestions(ticker, s.label, display),
+                })
+              }
+            >
+              <div className="kpi-mini-label">{s.label}</div>
+              <div className="kpi-mini-value">{display}</div>
+              {basisLabel(snapshotBasis[s.key]) && (
+                <div
+                  style={{
+                    fontSize: '10px', marginTop: 2,
+                    color: snapshotBasis[s.key]?.stale ? 'var(--amber-ink, var(--negative))' : 'var(--text-muted)',
+                  }}
+                  title={source}
+                >
+                  {basisLabel(snapshotBasis[s.key])}{snapshotBasis[s.key]?.stale ? ' · stale' : ''}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
       <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', margin: '-4px 0 10px' }}>
         SEC companyfacts · each figure labeled with its reporting period · click any number to ask about it
       </div>
+      <DataIntegrityPanel data={data} />
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
         <span className="section-label" style={{ marginBottom: 0 }}>

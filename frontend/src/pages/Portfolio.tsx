@@ -463,9 +463,18 @@ interface EntryDraft {
   shares: string;
   price: string;
   date: string;
+  positionType: string;
+  note: string;
 }
 
-const emptyDraft = (): EntryDraft => ({ ticker: '', shares: '', price: '', date: localToday() });
+const emptyDraft = (): EntryDraft => ({
+  ticker: '',
+  shares: '',
+  price: '',
+  date: localToday(),
+  positionType: '',
+  note: '',
+});
 
 function EntryForm({
   kind,
@@ -486,9 +495,22 @@ function EntryForm({
         throw new Error('Ticker, positive shares, a positive price and a date are required.');
       }
       if (kind === 'purchase') {
-        return addLot({ ticker, shares, cost_basis: price, purchase_date: draft.date });
+        return addLot({
+          ticker,
+          shares,
+          cost_basis: price,
+          purchase_date: draft.date,
+          ...(draft.positionType ? { position_type: draft.positionType } : {}),
+          ...(draft.note.trim() ? { note: draft.note.trim() } : {}),
+        });
       }
-      return recordSale({ ticker, shares, price, sale_date: draft.date });
+      return recordSale({
+        ticker,
+        shares,
+        price,
+        sale_date: draft.date,
+        ...(draft.note.trim() ? { note: draft.note.trim() } : {}),
+      });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['portfolio'] });
@@ -501,34 +523,95 @@ function EntryForm({
     setDraft((d) => ({ ...d, [k]: e.target.value }));
 
   return (
-    <div className="card" style={{ marginBottom: 12 }}>
-      <div className="card-title">{kind === 'purchase' ? 'Record purchase' : 'Record sale'}</div>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <input className="editor-input editor-input-ticker" placeholder="TICKER" value={draft.ticker} onChange={set('ticker')} aria-label="Ticker" />
-        <input className="editor-input editor-input-num" placeholder="Shares" value={draft.shares} onChange={set('shares')} aria-label="Shares" />
-        <input
-          className="editor-input editor-input-num"
-          placeholder={kind === 'purchase' ? 'Cost/share' : 'Price'}
-          value={draft.price}
-          onChange={set('price')}
-          aria-label={kind === 'purchase' ? 'Cost per share' : 'Sale price'}
-        />
-        <input className="editor-input" type="date" value={draft.date} onChange={set('date')} aria-label="Date" />
-        <button className="btn btn-accent" style={{ padding: '5px 14px', fontSize: 'var(--text-xs)' }} disabled={mutation.isPending} onClick={() => mutation.mutate()}>
-          {mutation.isPending ? 'Recording…' : kind === 'purchase' ? 'Record purchase' : 'Record sale'}
-        </button>
-        <button className="btn btn-ghost" style={{ padding: '5px 10px', fontSize: 'var(--text-xs)' }} onClick={onClose}>
-          Cancel
-        </button>
-      </div>
-      {mutation.isError && (
-        <div className="banner banner-warning" style={{ marginTop: 10 }}>
-          {(mutation.error as Error).message}
-          <div className="muted" style={{ fontSize: 'var(--text-xs)', marginTop: 4 }}>
-            Check shares/price/date and try again. If you are correcting an already-recorded entry rather than recording a trade, use “fix entry” on the lot instead.
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal" style={{ width: 500, maxWidth: 'calc(100vw - 32px)' }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+          <div className="card-title" style={{ marginBottom: 0 }}>
+            {kind === 'purchase' ? 'Record purchase lot' : 'Record sale'}
           </div>
+          <button className="reader-popup-close" style={{ marginLeft: 'auto' }} onClick={onClose} aria-label="Close transaction form">
+            Close
+          </button>
         </div>
-      )}
+        <div className="muted" style={{ fontSize: 'var(--text-xs)', marginBottom: 12, lineHeight: 1.5 }}>
+          {kind === 'purchase'
+            ? 'Adds one explicit purchase lot to the ledger.'
+            : 'Records a sale against open lots using the ledger FIFO matcher.'}
+        </div>
+        <form
+          className="stack"
+          onSubmit={(e) => {
+            e.preventDefault();
+            mutation.mutate();
+          }}
+        >
+          <label style={{ fontSize: 'var(--text-xs)' }}>
+            Ticker
+            <input
+              className="field"
+              style={{ marginTop: 4, textTransform: 'uppercase', fontFamily: 'var(--font-data)' }}
+              placeholder="AAPL"
+              value={draft.ticker}
+              onChange={set('ticker')}
+              autoFocus
+              aria-label="Ticker"
+            />
+          </label>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8 }}>
+            <label style={{ fontSize: 'var(--text-xs)' }}>
+              Shares
+              <input className="field" style={{ marginTop: 4 }} inputMode="decimal" value={draft.shares} onChange={set('shares')} aria-label="Shares" />
+            </label>
+            <label style={{ fontSize: 'var(--text-xs)' }}>
+              {kind === 'purchase' ? 'Cost / share' : 'Sale price'}
+              <input className="field" style={{ marginTop: 4 }} inputMode="decimal" value={draft.price} onChange={set('price')} aria-label={kind === 'purchase' ? 'Cost per share' : 'Sale price'} />
+            </label>
+            <label style={{ fontSize: 'var(--text-xs)' }}>
+              Date
+              <input className="field" type="date" style={{ marginTop: 4 }} value={draft.date} onChange={set('date')} aria-label="Date" />
+            </label>
+          </div>
+          {kind === 'purchase' && (
+            <label style={{ fontSize: 'var(--text-xs)' }}>
+              Position type
+              <select
+                className="field"
+                style={{ marginTop: 4 }}
+                value={draft.positionType}
+                onChange={(e) => setDraft((d) => ({ ...d, positionType: e.target.value }))}
+                aria-label="Position type"
+              >
+                <option value="">Not set</option>
+                {POSITION_TYPES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label style={{ fontSize: 'var(--text-xs)' }}>
+            Note
+            <input className="field" style={{ marginTop: 4 }} value={draft.note} onChange={set('note')} placeholder="Optional" aria-label="Note" />
+          </label>
+          {mutation.isError && (
+            <div className="banner banner-warning">
+              {(mutation.error as Error).message}
+              <div className="muted" style={{ fontSize: 'var(--text-xs)', marginTop: 4 }}>
+                Check shares/price/date and try again. If you are correcting an already-recorded entry rather than recording a trade, use “fix entry” on the lot instead.
+              </div>
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <button className="btn btn-ghost" type="button" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="btn btn-accent" type="submit" disabled={mutation.isPending}>
+              {mutation.isPending ? 'Recording…' : kind === 'purchase' ? 'Record purchase' : 'Record sale'}
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
@@ -729,8 +812,6 @@ export default function Portfolio() {
         </div>
       </div>
 
-      {/* Render the entry form right under the header so the button visibly does
-          something — it used to render below the charts, far off-screen. */}
       {entryForm && <EntryForm kind={entryForm} onClose={() => setEntryForm(null)} />}
 
       <div className="kpi-grid" style={{ marginBottom: 14 }}>
