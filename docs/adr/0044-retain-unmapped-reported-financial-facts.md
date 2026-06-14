@@ -1,3 +1,0 @@
-# Retain Unmapped Reported Financial Facts
-
-FundOps will retain relevant source-level Reported Financial Facts even when they are not yet mapped into Supported Financial Metrics. Unmapped facts are useful for future mapping, audit, restatement handling, coverage-gap analysis, and explaining why a metric is missing, but they must not become workflow-decision evidence until mapping governance promotes them into accepted mappings, calculated observations, or supported metrics. We choose this over storing only currently used metrics because FundOps needs recoverable financial history without letting raw provider fields quietly gain decision authority.

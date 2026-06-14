@@ -1,5 +1,0 @@
-# New Baseline Workspace Database File
-
-The new platform architecture stores the Local FundOps Workspace in a new SQLite file (workspace.db, FUNDOPS_DB-overridable) with a fresh baseline schema, leaving the proof-of-concept database file untouched rather than migrating or deleting it. Forward-only migrations apply from this new baseline (ADR-0030); migration 1 is the full spine schema covering identity, constitution versions, typed criteria, proposals, settings projections, evidence, periodized financial observations, workflow runs and steps, shared artifact identity, typed workflow rows, thesis health operational records, the portfolio ledger, dashboard items and responses, learning records, the durable work queue, execution provenance, and AI usage records.
-
-We chose a separate file over reusing the PoC database path because ADR-0029 frees the new architecture from PoC schema compatibility, and a clean file makes the break observable: the old database remains inspectable history, and nothing in the new platform can accidentally depend on it.

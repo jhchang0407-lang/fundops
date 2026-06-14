@@ -1,3 +1,0 @@
-# Versioned Constitution Evolution
-
-Strategy changes will be captured as reviewable Strategy Change Proposals, and activation will create a new immutable Constitution Version rather than mutating the current strategy in place. Each workflow output records the Constitution Version that produced it, and users must be able to inspect any version and compare versions through a Constitution Diff. We chose this because users can refine their strategy through chat and learning-loop recommendations over time, but FundOps must preserve which strategy drove each screen, thesis, IC decision, memo, allocator recommendation, and outcome.

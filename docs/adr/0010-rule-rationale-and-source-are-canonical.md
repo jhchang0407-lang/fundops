@@ -1,3 +1,0 @@
-# Rule Rationale and Source Are Canonical
-
-Every Constitution Version must preserve an overall rationale, and every active strategy rule or projected workflow setting must preserve its own rationale and source link to the accepted proposal, chat turn, or version event that created it. Rules without rationale and source should not activate. This is a user/function behavior decision, not a database schema decision; exact storage, retrieval, and RAG architecture are deferred. We chose this instead of relying on model memory because users need reliable answers to "why is this setting here?", workflow behavior must remain auditable after the conversation has moved on, and these rationales become evidence for the learning loop and user recall behavior.

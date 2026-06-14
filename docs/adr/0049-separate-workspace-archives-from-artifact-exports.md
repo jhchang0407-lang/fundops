@@ -1,3 +1,0 @@
-# Separate Workspace Archives From Artifact Exports
-
-FundOps will support whole-workspace portability through Workspace Archives while keeping individual Artifact Export focused on user-facing completed artifacts such as Retail Artifact PDFs. A Workspace Archive should package the Local FundOps Workspace's retained database state, artifact blobs, retained source snapshots, rendered outputs, and workspace version metadata for backup, restore, or migration. We choose this separation so polished artifact sharing does not become a fragile backup mechanism, and backup/restore does not expose raw database internals as the normal retail export experience.

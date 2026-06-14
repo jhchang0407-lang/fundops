@@ -1,3 +1,0 @@
-# UI-Native Agent Workspace
-
-FundOps will be a UI-Native Agent Workspace: the user works through a native UI backed by Python workflow capabilities, while the Agent-Native Workspace Contract coordinates attached coding-agent work such as strategy proposal preparation, extension packs, harness checks, previews, diffs, and rollback. HTTP APIs may still exist as UI adapters, but the primary product contract is the workspace harness rather than a public API-first surface. We chose this because FundOps is scoped as a product that lives on top of the user's Codex or Claude Code session without becoming terminal-only, and local software modification is a core capability that needs reviewable workspace artifacts.

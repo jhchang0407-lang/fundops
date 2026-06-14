@@ -14,7 +14,6 @@ import json
 from backend.core import workspace as ws_mod
 from backend.core.workspace import new_id, now_iso
 from backend.domain.artifact_schemas import SCORE_ONLY_HURDLE_NOTE
-from scripts.quality_audit import audit_artifact
 
 
 def _insert_artifact(stores, kind, payload, rendered_md, created_at, ticker=None):
@@ -67,13 +66,13 @@ def test_backfill_repairs_legacy_records(stores):
     note = stores.artifacts.get(note_id)
     assert note["payload"]["kind"] == "industry_note"
     assert note["payload"]["generated_at"] == created
-    assert audit_artifact(note) == [] or "schema" not in str(audit_artifact(note))
+    assert note["payload"]["body"]["kind"] == "thematic_report"
 
     # (b) score-based hurdle note added to body and rendered_md tail.
     verdict = stores.artifacts.get(verdict_id)
     assert verdict["payload"]["body"]["hurdle_note"] == SCORE_ONLY_HURDLE_NOTE
     assert verdict["rendered_md"].rstrip().endswith(f"_{SCORE_ONLY_HURDLE_NOTE}_")
-    assert not any("no hurdle findings" in p for p in audit_artifact(verdict))
+    assert verdict["payload"]["body"]["hurdle_findings"] == []
 
     # (c) leaked ids scrubbed from both rationale and rendered_md.
     leak = stores.artifacts.get(leak_id)
