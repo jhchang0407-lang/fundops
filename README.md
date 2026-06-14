@@ -19,6 +19,14 @@ you in an Inbox — without ever delegating the investment decision to software.
 |---|---|
 | ![FundOps Markets research hub](docs/assets/screenshots/markets-research.png) | ![FundOps Operations settings](docs/assets/screenshots/operations-settings.png) |
 
+| Screener results | Example investment memo |
+|---|---|
+| ![FundOps Screener results](docs/assets/screenshots/screener-results.png) | ![FundOps example investment memo](docs/assets/screenshots/example-memo.png) |
+
+| Company page workflow map | Market output dashboard |
+|---|---|
+| ![FundOps Company page workflow map](docs/assets/screenshots/company-page-adbe.png) | ![FundOps semiconductor market output dashboard](docs/assets/screenshots/market-output-semiconductors.png) |
+
 ## What is this?
 
 FundOps is an investment learning partner, not an autonomous fund manager. The AI helps you
