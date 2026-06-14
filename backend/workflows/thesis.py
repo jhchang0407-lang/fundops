@@ -385,9 +385,8 @@ def _num(v) -> float | None:
 
 
 def _reconcile_tol(expected: float) -> float:
-    """Auditor tolerance (scripts/quality_audit.py): the return components may
-    differ from the headline by at most max(1.5 points, 5%). Kept numerically
-    identical so a thesis that passes generation also passes the CI audit."""
+    """Return components may differ from the headline by at most
+    max(1.5 points, 5%) before the profile is treated as incoherent."""
     return max(1.5, abs(expected) * 0.05)
 
 
